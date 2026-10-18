@@ -1,0 +1,11 @@
+# Clasp configuration & authentication
+.clasp.json
+.clasprc.json
+
+# OS and system files
+.DS_Store
+Thumbs.db
+
+# Logs and environment
+*.log
+.env

@@ -1,0 +1,2348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>OpenWMS - Smart Inventory Control</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .badge-expired { background-color: #fee2e2; color: #991b1b; }
+    .badge-near { background-color: #fef3c7; color: #92400e; }
+    .badge-safe { background-color: #dcfce7; color: #166534; }
+    .badge-none { background-color: #f1f5f9; color: #475569; }
+    .badge-voided { background-color: #f3f4f6; color: #9ca3af; text-decoration: line-through; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 flex h-screen overflow-hidden">
+
+  <!-- Sidebar Navigation -->
+  <aside class="w-64 bg-slate-900 text-slate-200 flex flex-col justify-between shadow-xl flex-shrink-0">
+    <div>
+      <div class="h-16 flex items-center px-6 border-b border-slate-800 font-bold text-lg text-emerald-400">
+        <i class="fa-solid fa-boxes-stacked mr-3 text-xl"></i> OpenWMS
+      </div>
+      <nav class="mt-4 px-3 space-y-1">
+        <button onclick="switchTab('dashboard')" id="nav-dashboard" class="w-full flex items-center px-3 py-2.5 rounded-lg text-sm font-medium bg-slate-800 text-white transition">
+          <i class="fa-solid fa-chart-pie w-6"></i> Dashboard
+        </button>
+        <button onclick="switchTab('batches')" id="nav-batches" class="w-full flex items-center px-3 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 hover:text-white transition">
+          <i class="fa-solid fa-cubes w-6"></i> Stock & Batches
+        </button>
+        <button onclick="switchTab('open-pos')" id="nav-open-pos" class="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 hover:text-white transition">
+          <span class="flex items-center">
+            <i class="fa-solid fa-plane-arrival w-6 text-indigo-400"></i> In-Transit POs
+          </span>
+          <span id="nav-po-badge" class="bg-indigo-950 text-indigo-300 border border-indigo-700/60 text-[10px] font-bold px-1.5 py-0.5 rounded-full">0</span>
+        </button>
+        <button onclick="switchTab('transactions')" id="nav-transactions" class="w-full flex items-center px-3 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 hover:text-white transition">
+          <i class="fa-solid fa-arrow-right-arrow-left w-6"></i> Transaction Ledger
+        </button>
+        <button onclick="switchTab('items')" id="nav-items" class="w-full flex items-center px-3 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 hover:text-white transition">
+          <i class="fa-solid fa-list-check w-6"></i> Item Master (SKU)
+        </button>
+      </nav>
+    </div>
+
+    <!-- Bottom Sidebar -->
+    <div class="p-3 border-t border-slate-800 space-y-2">
+      <button onclick="switchTab('guide')" id="nav-guide" class="w-full flex items-center px-3 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800/80 transition">
+        <i class="fa-solid fa-book-open w-5 text-blue-400"></i> User Guide
+      </button>
+      <div class="text-xs text-slate-400 truncate flex items-center gap-2 px-1 pt-1 border-t border-slate-800/50" title="Authenticated Operator">
+        <i class="fa-solid fa-circle-user text-emerald-400 text-sm"></i>
+        <span id="user-email-display" class="truncate font-medium">Authenticating...</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content Area -->
+  <main class="flex-1 flex flex-col overflow-y-auto">
+    <header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 shadow-sm flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <h1 id="page-title" class="text-xl font-bold text-slate-800">Inventory Dashboard & Planning</h1>
+        <span id="sync-indicator" class="hidden text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-full font-semibold animate-pulse">
+          <i class="fa-solid fa-arrows-rotate fa-spin mr-1"></i> Syncing with Sheet...
+        </span>
+      </div>
+      <div class="flex items-center gap-3">
+        <button onclick="loadInitialData()" class="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition" title="Refresh from Google Sheets">
+          <i class="fa-solid fa-rotate"></i>
+        </button>
+        <button onclick="switchTab('open-pos')" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-3.5 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 shadow-sm transition">
+          <i class="fa-solid fa-plane-arrival text-indigo-600"></i> In-Transit POs ( <span id="btn-po-count">0</span> )
+        </button>
+        <button onclick="exportAllTransactionsToExcel()" class="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-3.5 py-2 rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm transition">
+          <i class="fa-solid fa-file-excel text-emerald-600"></i> Export Ledger
+        </button>
+        <button onclick="openTxModal('IN')" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow flex items-center gap-2 transition">
+          <i class="fa-solid fa-plus"></i> Stock In (IN)
+        </button>
+        <button onclick="openTxModal('OUT')" class="bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow flex items-center gap-2 transition">
+          <i class="fa-solid fa-minus"></i> Stock Out (OUT)
+        </button>
+      </div>
+    </header>
+
+    <div class="p-8 space-y-6">
+
+      <!-- TAB 1: DASHBOARD -->
+      <section id="tab-dashboard" class="space-y-6">
+        <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+          <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total SKUs</span>
+            <div id="kpi-sku" class="text-2xl font-bold text-slate-800 mt-2">--</div>
+          </div>
+          <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Physical On-Hand</span>
+            <div id="kpi-stock" class="text-2xl font-bold text-slate-800 mt-2">--</div>
+          </div>
+          <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+            <span class="text-xs font-semibold text-amber-600 uppercase tracking-wider">Expiring (< 30 Days)</span>
+            <div id="kpi-near" class="text-2xl font-bold text-amber-600 mt-2">--</div>
+          </div>
+          <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+            <span class="text-xs font-semibold text-rose-600 uppercase tracking-wider">Expired Lots</span>
+            <div id="kpi-expired" class="text-2xl font-bold text-rose-600 mt-2">--</div>
+          </div>
+          <div class="bg-white p-5 rounded-xl border border-amber-300 bg-amber-50/40 shadow-sm">
+            <span class="text-xs font-semibold text-amber-700 uppercase tracking-wider flex items-center gap-1">
+              <i class="fa-solid fa-triangle-exclamation"></i> Reorder Alerts
+            </span>
+            <div id="kpi-reorder" class="text-2xl font-bold text-amber-700 mt-2">--</div>
+          </div>
+        </div>
+
+        <div id="reorder-section" class="bg-white rounded-xl border border-amber-200 shadow-sm p-5">
+          <div class="flex flex-wrap justify-between items-center gap-2 mb-3">
+            <div>
+              <h3 class="font-bold text-slate-800 text-sm flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
+                Procurement & In-Transit Planning (Inventory Position vs Reorder Point)
+              </h3>
+              <p class="text-xs text-slate-400 mt-0.5">Excludes SKUs with Min Stock = 0. Items with active In-Transit POs are marked to prevent duplicate ordering.</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-slate-500 font-medium" id="reorder-count-badge">0 item(s)</span>
+              <button onclick="openLogPOModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 shadow-sm transition">
+                <i class="fa-solid fa-plus"></i> Log Open PO
+              </button>
+            </div>
+          </div>
+          <div class="overflow-x-auto max-h-64">
+            <table class="w-full text-left text-sm text-slate-600">
+              <thead class="bg-slate-50 text-slate-500 uppercase text-xs sticky top-0">
+                <tr>
+                  <th class="py-2.5 px-3">Item Code</th>
+                  <th class="py-2.5 px-3">Description</th>
+                  <th class="py-2.5 px-3 text-right">On-Hand</th>
+                  <th class="py-2.5 px-3 text-right">Min Stock</th>
+                  <th class="py-2.5 px-3 text-right text-indigo-700 font-bold">On-Order (In-Transit)</th>
+                  <th class="py-2.5 px-3 text-right">Net Deficit</th>
+                  <th class="py-2.5 px-3 text-center">Planning Status</th>
+                  <th class="py-2.5 px-3 text-center">Action</th>
+                </tr>
+              </thead>
+              <tbody id="reorder-tbody" class="divide-y divide-slate-100"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div class="lg:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm p-5 flex flex-col justify-between">
+            <div>
+              <div class="flex flex-wrap justify-between items-center gap-2 mb-4">
+                <div>
+                  <h3 class="font-bold text-slate-800 text-sm flex items-center gap-2">
+                    <i class="fa-solid fa-chart-line text-emerald-600"></i> Inbound vs Outbound Trend Analysis
+                  </h3>
+                  <div class="flex items-center gap-2 mt-1">
+                    <span id="chart-drill-status" class="text-xs text-slate-500 font-medium">Viewing: Daily Trend</span>
+                    <button id="btn-drill-up" onclick="drillUpTrend()" class="hidden text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 px-2 py-0.5 rounded font-semibold transition">
+                      <i class="fa-solid fa-arrow-up mr-1"></i> Drill Up
+                    </button>
+                  </div>
+                </div>
+
+                <div class="flex items-center gap-2">
+                  <div class="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-50 text-xs font-semibold">
+                    <button onclick="setTrendGranularity('daily')" id="btn-gran-daily" class="px-2.5 py-1 rounded-md bg-white shadow-sm text-slate-800 transition">Daily</button>
+                    <button onclick="setTrendGranularity('monthly')" id="btn-gran-monthly" class="px-2.5 py-1 rounded-md text-slate-500 hover:text-slate-800 transition">Monthly</button>
+                    <button onclick="setTrendGranularity('yearly')" id="btn-gran-yearly" class="px-2.5 py-1 rounded-md text-slate-500 hover:text-slate-800 transition">Yearly</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="h-64 relative">
+                <canvas id="trendChart"></canvas>
+              </div>
+            </div>
+            
+            <div class="pt-3 border-t border-slate-100 flex justify-between items-center text-[11px] text-slate-400">
+              <span><i class="fa-solid fa-mouse-pointer text-blue-500 mr-1"></i> In Monthly view, click any month to drill down into its daily view.</span>
+              <span id="chart-net-movement" class="font-semibold text-slate-600">Net Flow: 0 units</span>
+            </div>
+          </div>
+
+          <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5 flex flex-col justify-between">
+            <div>
+              <h3 class="font-bold text-slate-800 text-sm mb-4 flex items-center gap-2">
+                <i class="fa-solid fa-fire-flame-curved text-rose-500"></i> Top Consumed Items (Dispatched)
+              </h3>
+              <div id="top-consumed-list" class="space-y-3"></div>
+            </div>
+            <div class="pt-4 border-t border-slate-100 text-[11px] text-slate-400">
+              Aggregated from verified Outward transactions
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="font-bold text-slate-800 text-sm flex items-center gap-2">
+              <i class="fa-solid fa-clock-rotate-left text-slate-400"></i> Recent Activity Log
+            </h3>
+            <div class="flex items-center gap-3">
+              <button onclick="toggleRecentTx()" id="btn-toggle-recent" class="text-xs text-slate-500 hover:text-slate-800 font-medium">
+                <i class="fa-solid fa-eye-slash mr-1"></i> Hide
+              </button>
+              <button onclick="switchTab('transactions')" class="text-xs text-blue-600 hover:underline font-semibold">
+                Open Full Ledger &rarr;
+              </button>
+            </div>
+          </div>
+          <div id="recent-tx-wrapper" class="overflow-x-auto">
+            <table class="w-full text-left text-sm text-slate-600">
+              <thead class="bg-slate-50 text-slate-500 uppercase text-xs">
+                <tr>
+                  <th class="py-2 px-3">Tx ID</th>
+                  <th class="py-2 px-3">Timestamp</th>
+                  <th class="py-2 px-3">Type</th>
+                  <th class="py-2 px-3">SKU</th>
+                  <th class="py-2 px-3">Description</th>
+                  <th class="py-2 px-3">Lot #</th>
+                  <th class="py-2 px-3 text-right">Qty</th>
+                  <th class="py-2 px-3">Operator</th>
+                  <th class="py-2 px-3 text-center">Status</th>
+                  <th class="py-2 px-3 text-center">Action</th>
+                </tr>
+              </thead>
+              <tbody id="dashboard-tx-table" class="divide-y divide-slate-100"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: STOCK & BATCHES -->
+      <section id="tab-batches" class="hidden space-y-4">
+        <div class="flex flex-wrap justify-between items-center gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div class="flex flex-wrap items-center gap-3">
+            <input type="text" id="search-stock" onkeyup="filterStockView()" placeholder="Search SKU, item name or lot..." class="w-72 px-3 py-2 border rounded-lg text-sm focus:outline-emerald-500">
+            
+            <div class="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-50 text-xs font-semibold">
+              <button onclick="setStockViewMode('sku')" id="btn-view-sku" class="px-3 py-1.5 rounded-md bg-white shadow-sm text-slate-800 font-bold transition flex items-center gap-1.5">
+                <i class="fa-solid fa-layer-group text-emerald-600"></i> Summary by SKU
+              </button>
+              <button onclick="setStockViewMode('lot')" id="btn-view-lot" class="px-3 py-1.5 rounded-md text-slate-500 hover:text-slate-800 transition flex items-center gap-1.5">
+                <i class="fa-solid fa-barcode text-blue-500"></i> Detailed by Lot (FEFO)
+              </button>
+            </div>
+            
+            <span id="stock-view-hint" class="text-xs text-slate-400 font-medium">Click any SKU to inspect lot breakdown</span>
+          </div>
+
+          <button onclick="exportCurrentStockView()" id="btn-export-stock" class="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-3.5 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 shadow-sm transition">
+            <i class="fa-solid fa-file-excel text-emerald-600"></i> Export SKU Summary (.xlsx)
+          </button>
+        </div>
+
+        <!-- TABLE VIEW 1: SUMMARY BY SKU -->
+        <div id="stock-sku-wrapper" class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <table class="w-full text-left text-sm text-slate-600">
+            <thead class="bg-slate-50 text-slate-500 uppercase text-xs">
+              <tr>
+                <th class="py-3 px-4">Item Code</th>
+                <th class="py-3 px-4">Item Description</th>
+                <th class="py-3 px-4">Category</th>
+                <th class="py-3 px-4">UoM</th>
+                <th class="py-3 px-4 text-right font-bold text-slate-900">Physical On-Hand</th>
+                <th class="py-3 px-4 text-right font-bold text-indigo-700">In-Transit (PO)</th>
+                <th class="py-3 px-4 text-right font-bold text-emerald-700">Effective Stock</th>
+                <th class="py-3 px-4 text-center">Active Lots</th>
+                <th class="py-3 px-4 text-center">Action</th>
+              </tr>
+            </thead>
+            <tbody id="stock-sku-tbody" class="divide-y divide-slate-100"></tbody>
+          </table>
+        </div>
+
+        <!-- TABLE VIEW 2: DETAILED BY LOT (FEFO) -->
+        <div id="stock-lot-wrapper" class="hidden bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <table class="w-full text-left text-sm text-slate-600">
+            <thead class="bg-slate-50 text-slate-500 uppercase text-xs">
+              <tr>
+                <th class="py-3 px-4">Item Code</th>
+                <th class="py-3 px-4">Item Description</th>
+                <th class="py-3 px-4">Lot Number</th>
+                <th class="py-3 px-4">Expiry Date</th>
+                <th class="py-3 px-4">Expiry Status</th>
+                <th class="py-3 px-4 text-right">Total In</th>
+                <th class="py-3 px-4 text-right">Total Out</th>
+                <th class="py-3 px-4 text-right font-bold text-slate-900">On-Hand Stock</th>
+              </tr>
+            </thead>
+            <tbody id="lots-tbody" class="divide-y divide-slate-100"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- TAB 3: DEDICATED IN-TRANSIT POS TRACKER -->
+      <section id="tab-open-pos" class="hidden space-y-4">
+        <div class="flex flex-wrap justify-between items-center gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div class="flex flex-wrap items-center gap-3">
+            <input type="text" id="search-open-pos" onkeyup="filterOpenPOsTable()" placeholder="Search PO #, SKU, Item, Notes..." class="w-72 px-3 py-2 border rounded-lg text-sm focus:outline-indigo-500">
+            <select id="filter-po-status" onchange="filterOpenPOsTable()" class="border rounded-lg px-3 py-2 text-sm bg-slate-50 text-slate-700 font-medium">
+              <option value="">All Statuses</option>
+              <option value="ACTIVE" selected>Active Only (Open & Partial)</option>
+              <option value="OPEN">Open Only</option>
+              <option value="PARTIAL">Partial Delivery</option>
+              <option value="RECEIVED">Fully Received</option>
+              <option value="CANCELLED">Cancelled</option>
+            </select>
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="exportPOsToExcel()" class="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-3.5 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 shadow-sm transition">
+              <i class="fa-solid fa-file-excel text-emerald-600"></i> Export POs (.xlsx)
+            </button>
+            <button onclick="openLogPOModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 shadow-sm transition">
+              <i class="fa-solid fa-plus"></i> Log New PO
+            </button>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <table class="w-full text-left text-sm text-slate-600">
+            <thead class="bg-slate-50 text-slate-500 uppercase text-xs">
+              <tr>
+                <th class="py-3 px-3">PO Number</th>
+                <th class="py-3 px-3">Item Code</th>
+                <th class="py-3 px-3">Description</th>
+                <th class="py-3 px-3 text-center">Status</th>
+                <th class="py-3 px-3 text-right">Qty Ordered</th>
+                <th class="py-3 px-3 text-right">Qty Received</th>
+                <th class="py-3 px-3 text-right font-bold text-indigo-900">Remaining Qty</th>
+                <th class="py-3 px-3">ETA Date</th>
+                <th class="py-3 px-3">Notes / Forwarder</th>
+                <th class="py-3 px-3">Created Date</th>
+                <th class="py-3 px-3 text-center">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="open-pos-full-tbody" class="divide-y divide-slate-100"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- TAB 4: TRANSACTION LEDGER WITH PAGINATION -->
+      <section id="tab-transactions" class="hidden space-y-4">
+        <div class="flex flex-wrap justify-between items-center gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div class="flex flex-wrap items-center gap-3">
+            <input type="text" id="search-tx" onkeyup="filterTxTable()" placeholder="Search TxID, SKU, Lot, Note..." class="w-72 px-3 py-2 border rounded-lg text-sm focus:outline-blue-500">
+            <select id="filter-tx-type" onchange="filterTxTable()" class="border rounded-lg px-3 py-2 text-sm bg-slate-50 text-slate-700 font-medium">
+              <option value="">All Types (IN, OUT, VOID)</option>
+              <option value="IN">Inbound (IN)</option>
+              <option value="OUT">Outbound (OUT)</option>
+              <option value="VOID">Void Entries</option>
+            </select>
+            <div class="flex items-center gap-1.5 text-xs text-slate-500 font-medium">
+              <span>Show:</span>
+              <select id="tx-page-size" onchange="changeTxPageSize(this.value)" class="border rounded-lg px-2.5 py-1 bg-slate-50 text-slate-700 font-semibold focus:outline-blue-500">
+                <option value="50" selected>50</option>
+                <option value="100">100</option>
+                <option value="200">200</option>
+              </select>
+              <span>per page</span>
+            </div>
+          </div>
+          <button onclick="exportAllTransactionsToExcel()" class="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-3.5 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 shadow-sm transition">
+            <i class="fa-solid fa-file-excel text-emerald-600"></i> Export Ledger (.xlsx)
+          </button>
+        </div>
+
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <table class="w-full text-left text-sm text-slate-600">
+            <thead class="bg-slate-50 text-slate-500 uppercase text-xs">
+              <tr>
+                <th class="py-3 px-3">Tx ID</th>
+                <th class="py-3 px-3">Timestamp</th>
+                <th class="py-3 px-3">Type</th>
+                <th class="py-3 px-3">SKU</th>
+                <th class="py-3 px-3">Item Description</th>
+                <th class="py-3 px-3">Lot #</th>
+                <th class="py-3 px-3 text-right">Qty</th>
+                <th class="py-3 px-3">Operator</th>
+                <th class="py-3 px-3 text-center">Status</th>
+                <th class="py-3 px-3">Notes & Reason</th>
+                <th class="py-3 px-3 text-center">Action</th>
+              </tr>
+            </thead>
+            <tbody id="full-tx-tbody" class="divide-y divide-slate-100"></tbody>
+          </table>
+
+          <div class="px-6 py-3 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600 font-medium">
+            <div id="tx-pagination-info">Showing 0 to 0 of 0 entries</div>
+            <div class="flex items-center gap-1.5" id="tx-pagination-controls"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 5: MASTER SKU -->
+      <section id="tab-items" class="hidden space-y-4">
+        <div class="flex justify-between items-center">
+          <button onclick="openItemModal()" class="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium shadow flex items-center gap-2">
+            <i class="fa-solid fa-plus"></i> Add New SKU
+          </button>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <table class="w-full text-left text-sm text-slate-600">
+            <thead class="bg-slate-50 text-slate-500 uppercase text-xs">
+              <tr>
+                <th class="py-3 px-4">Item Code</th>
+                <th class="py-3 px-4">Item Name</th>
+                <th class="py-3 px-4">Category</th>
+                <th class="py-3 px-4">UoM</th>
+                <th class="py-3 px-4 text-right">Reorder Threshold (Min)</th>
+              </tr>
+            </thead>
+            <tbody id="items-tbody" class="divide-y divide-slate-100"></tbody>
+          </table>
+        </div>
+      </section>
+
+<!-- TAB 6: USER GUIDELINE -->
+      <!-- TAB 6: USER GUIDELINE & SOP MANUAL -->
+      <section id="tab-guide" class="hidden space-y-4 overflow-y-auto max-h-[calc(100vh-140px)] pr-2">
+        <!-- Header Banner -->
+        <div class="flex flex-wrap justify-between items-center gap-3 bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold">
+              <i class="fa-solid fa-book-open text-lg"></i>
+            </div>
+            <div>
+              <h2 class="text-base font-bold text-slate-800">OpenWMS - Standard Operating Procedures & User Manual</h2>
+              <p class="text-xs text-slate-500">Operational guidelines for FEFO lot tracking, in-transit purchase orders, inventory guardrails, and audit compliance.</p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="bg-emerald-100 text-emerald-800 text-xs px-2.5 py-1 rounded-full font-medium flex items-center gap-1.5">
+              <i class="fa-solid fa-shield-check"></i> SSOT Verified
+            </span>
+            <span class="bg-slate-100 text-slate-700 text-xs px-2.5 py-1 rounded-full font-medium">
+              Version 1.0.0
+            </span>
+          </div>
+        </div>
+
+        <!-- Grid of SOP Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <!-- SOP 1: Master SKU & Safety Stock -->
+          <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-3">
+            <div class="flex items-center gap-2 text-indigo-600 font-bold text-sm border-b pb-2">
+              <i class="fa-solid fa-boxes-stacked"></i>
+              <h3>1. Master SKU & Safety Stock Rules</h3>
+            </div>
+            <p class="text-xs text-slate-600 leading-relaxed">
+              Every tracked product must be registered in the Master SKU catalog with a unique <code class="bg-slate-100 px-1 py-0.5 rounded text-indigo-600 font-semibold">ItemCode</code>, Category, and Unit of Measure.
+            </p>
+            <div class="bg-indigo-50/60 p-3 rounded-lg border border-indigo-100 text-xs space-y-1 text-slate-700">
+              <div class="font-semibold text-indigo-900">Reorder Threshold (MinStock):</div>
+              <ul class="list-disc list-inside space-y-1 text-slate-600">
+                <li><strong class="text-slate-800">MinStock &gt; 0:</strong> Automatically triggers stockout warnings when usable on-hand stock falls below threshold.</li>
+                <li><strong class="text-slate-800">MinStock = 0:</strong> Stockout alerting is bypassed (suitable for non-critical supplies).</li>
+                <li><strong class="text-slate-800">Usable Stock vs Expired:</strong> Expired stock is segregated and excluded from reorder math to prevent phantom stockouts.</li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- SOP 2: In-Transit PO Tracker -->
+          <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-3">
+            <div class="flex items-center gap-2 text-blue-600 font-bold text-sm border-b pb-2">
+              <i class="fa-solid fa-plane-arrival"></i>
+              <h3>2. In-Transit Purchase Order (PO) Tracker</h3>
+            </div>
+            <p class="text-xs text-slate-600 leading-relaxed">
+              Provides pipeline visibility by tracking goods ordered from suppliers before physical dock arrival.
+            </p>
+            <div class="bg-blue-50/60 p-3 rounded-lg border border-blue-100 text-xs space-y-2 text-slate-700">
+              <div class="font-mono bg-white px-2.5 py-1.5 rounded border border-blue-200 text-blue-900 text-[11px]">
+                Effective Stock = Usable On-Hand + In-Transit Quantity
+              </div>
+              <ul class="list-disc list-inside space-y-1 text-slate-600">
+                <li><strong class="text-slate-800">PO Life Cycle:</strong> <code class="text-blue-700 font-semibold">OPEN</code> &rarr; <code class="text-amber-700 font-semibold">PARTIAL</code> &rarr; <code class="text-emerald-700 font-semibold">RECEIVED</code>.</li>
+                <li><strong class="text-slate-800">Over-Receipt Guardrail:</strong> Inbound receipts cannot exceed the PO remaining balance. Excess attempts trigger hard stops.</li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- SOP 3: FEFO Lot System -->
+          <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-3">
+            <div class="flex items-center gap-2 text-amber-600 font-bold text-sm border-b pb-2">
+              <i class="fa-solid fa-hourglass-half"></i>
+              <h3>3. FEFO Lot System & Expiry Badges</h3>
+            </div>
+            <p class="text-xs text-slate-600 leading-relaxed">
+              Implements First-Expired, First-Out (FEFO) logic. Each batch is identified by <code class="bg-slate-100 px-1 py-0.5 rounded text-amber-700 font-semibold">ItemCode_LotNumber</code>.
+            </p>
+            <div class="grid grid-cols-3 gap-2 text-[11px] font-medium text-center">
+              <div class="p-2 rounded bg-emerald-50 border border-emerald-200 text-emerald-800">
+                <div class="font-bold">Safe</div>
+                <div class="text-[10px] text-emerald-600">&gt; 30 Days</div>
+              </div>
+              <div class="p-2 rounded bg-amber-50 border border-amber-200 text-amber-800">
+                <div class="font-bold">Near-Expiry</div>
+                <div class="text-[10px] text-amber-600">1 - 30 Days</div>
+              </div>
+              <div class="p-2 rounded bg-rose-50 border border-rose-200 text-rose-800">
+                <div class="font-bold">Expired</div>
+                <div class="text-[10px] text-rose-600">&le; 0 Days</div>
+              </div>
+            </div>
+            <p class="text-[11px] text-slate-500 italic">
+              Non-perishable consumables without expiration dates are tagged as 'None' and never trigger expiry alerts.
+            </p>
+          </div>
+
+          <!-- SOP 4: Temporal Consistency -->
+          <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-3">
+            <div class="flex items-center gap-2 text-purple-600 font-bold text-sm border-b pb-2">
+              <i class="fa-solid fa-clock-rotate-left"></i>
+              <h3>4. Temporal Consistency Guardrail</h3>
+            </div>
+            <p class="text-xs text-slate-600 leading-relaxed">
+              Prevents chronological inconsistencies in warehouse accounting ledgers:
+            </p>
+            <div class="bg-purple-50/60 p-3 rounded-lg border border-purple-100 text-xs space-y-1.5 text-slate-700">
+              <div class="font-semibold text-purple-900">Rule of Physical Reality:</div>
+              <p class="text-slate-600">
+                An outbound dispatch transaction (<code class="font-semibold text-purple-800">OUT</code>) cannot be backdated to a calendar date earlier than the lot's earliest inbound arrival (<code class="font-semibold text-purple-800">IN</code>).
+              </p>
+              <div class="bg-white p-2 rounded border border-purple-200 text-purple-800 font-mono text-[11px]">
+                T_dispatch(lot) &ge; min(T_inbound(lot))
+              </div>
+            </div>
+          </div>
+
+          <!-- SOP 5: Auditable Void Engine -->
+          <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-3 md:col-span-2">
+            <div class="flex items-center gap-2 text-rose-600 font-bold text-sm border-b pb-2">
+              <i class="fa-solid fa-ban"></i>
+              <h3>5. Auditable Void Engine (Immutable Ledger)</h3>
+            </div>
+            <p class="text-xs text-slate-600 leading-relaxed">
+              To maintain financial and audit integrity, physical deletion of transaction rows is strictly prohibited. Mistakes are corrected exclusively via compensating reversal entries.
+            </p>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+              <div class="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-1">
+                <div class="font-bold text-slate-800 flex items-center gap-1.5">
+                  <i class="fa-solid fa-file-invoice text-indigo-500"></i> Reversal Entry
+                </div>
+                <p class="text-slate-600 text-[11px]">
+                  Voiding an <code class="font-semibold">IN</code> generates a <code class="font-semibold text-rose-600">VOID_IN</code>. Voiding an <code class="font-semibold">OUT</code> generates a <code class="font-semibold text-emerald-600">VOID_OUT</code>. Original status changes to <code class="font-semibold text-slate-500">VOIDED</code>.
+                </p>
+              </div>
+              <div class="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-1">
+                <div class="font-bold text-slate-800 flex items-center gap-1.5">
+                  <i class="fa-solid fa-shield-virus text-amber-500"></i> Pre-Void Feasibility
+                </div>
+                <p class="text-slate-600 text-[11px]">
+                  Inbound transactions cannot be voided if remaining physical on-hand stock is lower than the void quantity (items were already consumed downstream).
+                </p>
+              </div>
+              <div class="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-1">
+                <div class="font-bold text-slate-800 flex items-center gap-1.5">
+                  <i class="fa-solid fa-rotate-left text-blue-500"></i> PO State Rollback
+                </div>
+                <p class="text-slate-600 text-[11px]">
+                  If the voided inbound was linked to a PO, the received quantity is decremented and the PO transitions back from <code class="font-semibold">RECEIVED</code> to <code class="font-semibold">PARTIAL</code> or <code class="font-semibold">OPEN</code>.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Documentation Footer & GitHub Reference -->
+        <div class="bg-slate-900 text-slate-300 p-4 rounded-xl flex flex-wrap justify-between items-center text-xs gap-3">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-code-branch text-emerald-400"></i>
+            <span>For technical architecture and database schema, see the local <code class="text-emerald-400 bg-slate-800 px-1 py-0.5 rounded">docs/</code> directory in the repository.</span>
+          </div>
+          <span class="text-slate-400">OpenWMS &copy; 2026 Open Source Project</span>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- MODAL: LOG OPEN PO -->
+  <div id="log-po-modal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm hidden items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
+      <div class="px-6 py-4 bg-indigo-600 text-white font-bold flex justify-between items-center">
+        <span class="flex items-center gap-2"><i class="fa-solid fa-plane-arrival"></i> Log In-Transit PO</span>
+        <button onclick="closeModal('log-po-modal')"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <form id="log-po-form" onsubmit="handleLogPOSubmit(event)" class="p-6 space-y-4 text-sm">
+        <div>
+          <label class="block font-medium mb-1">Target Item SKU *</label>
+          <select id="po-item-code" required class="w-full border rounded-lg px-3 py-2 bg-slate-50 focus:ring-2 focus:ring-indigo-500"></select>
+        </div>
+        <div>
+          <label class="block font-medium mb-1">Purchase Order (PO) Number *</label>
+          <input type="text" id="po-number" required placeholder="e.g. PO-IND-2026-089" class="w-full border rounded-lg px-3 py-2 uppercase font-mono">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block font-medium mb-1">Quantity Ordered *</label>
+            <input type="number" id="po-qty" required min="0.01" step="any" placeholder="Qty" class="w-full border rounded-lg px-3 py-2 font-bold text-slate-800">
+          </div>
+          <div>
+            <label class="block font-medium mb-1">Estimated Arrival (ETA)</label>
+            <input type="date" id="po-eta" class="w-full border rounded-lg px-3 py-2 text-slate-700">
+          </div>
+        </div>
+        <div>
+          <label class="block font-medium mb-1">Vendor / Forwarder Notes</label>
+          <input type="text" id="po-notes" placeholder="e.g. DHL tracking #, Supplier confirmation" class="w-full border rounded-lg px-3 py-2 text-slate-700">
+        </div>
+        <div class="pt-2 flex justify-end gap-2">
+          <button type="button" onclick="closeModal('log-po-modal')" class="px-4 py-2 border rounded-lg hover:bg-slate-50">Cancel</button>
+          <button type="submit" id="po-submit-btn" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium shadow">Save In-Transit PO</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: CREATE TRANSACTION -->
+  <div id="tx-modal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm hidden items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
+      <div id="tx-modal-header" class="px-6 py-4 bg-emerald-600 text-white font-bold flex justify-between items-center">
+        <span id="tx-modal-title">Stock Inbound (IN)</span>
+        <button onclick="closeModal('tx-modal')"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <form id="tx-form" onsubmit="handleTransactionSubmit(event)" class="p-6 space-y-4 text-sm">
+        <input type="hidden" id="tx-type" value="IN">
+        
+        <div>
+          <label class="block font-medium mb-1">Transaction Date *</label>
+          <input type="date" id="tx-date" required class="w-full border rounded-lg px-3 py-2 bg-white focus:ring-2 focus:ring-emerald-500 font-medium text-slate-800">
+          <span id="tx-date-hint" class="text-xs text-slate-400 mt-1 block">Defaults to today. Can be adjusted.</span>
+        </div>
+
+        <div id="po-link-container" class="bg-indigo-50/70 p-3 rounded-lg border border-indigo-200">
+          <div class="flex justify-between items-center mb-1">
+            <label class="block font-semibold text-xs text-indigo-900 flex items-center gap-1.5">
+              <i class="fa-solid fa-link text-indigo-600"></i> Fulfill In-Transit PO (Optional)
+            </label>
+            <span id="po-link-hint" class="text-[11px] text-indigo-600 font-medium"></span>
+          </div>
+          <select id="tx-po-link" onchange="onPoLinkChanged()" class="w-full border rounded-lg px-2.5 py-1.5 bg-white text-xs text-indigo-950 font-medium focus:ring-2 focus:ring-indigo-500">
+            <option value="">-- None (Direct / Unplanned Delivery) --</option>
+          </select>
+          <span class="text-[11px] text-indigo-700/80 mt-1 block">Select PO to auto-fill SKU & max allowed qty, or pick SKU below.</span>
+        </div>
+
+        <div>
+          <label class="block font-medium mb-1">Select Item SKU *</label>
+          <select id="tx-item" required onchange="onItemChanged(this.value)" class="w-full border rounded-lg px-3 py-2 bg-slate-50 focus:ring-2 focus:ring-emerald-500"></select>
+        </div>
+
+        <div id="in-lot-fields" class="space-y-4">
+          <div>
+            <label class="block font-medium mb-1">Lot / Batch Number</label>
+            <input type="text" id="tx-lot-in" placeholder="Leave empty for consumables (Default: N/A)" class="w-full border rounded-lg px-3 py-2 uppercase">
+          </div>
+          <div>
+            <label class="block font-medium mb-1">Expiry Date</label>
+            <input type="date" id="tx-expiry-in" class="w-full border rounded-lg px-3 py-2">
+            <span class="text-xs text-slate-400 mt-1 block">Leave empty if non-perishable</span>
+          </div>
+        </div>
+
+        <div id="out-lot-fields" class="space-y-4 hidden">
+          <div>
+            <label class="block font-medium mb-1">Select Available Lot (FEFO Order)</label>
+            <select id="tx-lot-out" onchange="onLotOutChanged()" class="w-full border rounded-lg px-3 py-2 bg-slate-50 focus:ring-2 focus:ring-rose-500">
+              <option value="">-- Choose item first --</option>
+            </select>
+            <div id="out-stock-hint" class="text-xs text-slate-500 mt-1"></div>
+          </div>
+          <div>
+            <label class="block font-medium mb-1">Lot Expiration Date</label>
+            <input type="text" id="tx-expiry-out" readonly placeholder="Auto-populated..." class="w-full border rounded-lg px-3 py-2 bg-slate-100 font-medium text-slate-700 cursor-not-allowed">
+          </div>
+        </div>
+
+        <div>
+          <div class="flex justify-between items-center mb-1">
+            <label class="block font-medium">Quantity *</label>
+            <span id="qty-limit-hint" class="text-[11px] text-indigo-600 font-semibold"></span>
+          </div>
+          <input type="number" id="tx-qty" required min="0.01" step="any" class="w-full border rounded-lg px-3 py-2 font-bold text-slate-800">
+        </div>
+
+        <div>
+          <label class="block font-medium mb-1">PO Number / Dispatch Note</label>
+          <input type="text" id="tx-note" placeholder="Reference note..." class="w-full border rounded-lg px-3 py-2">
+        </div>
+
+        <div class="pt-2 flex justify-end gap-2">
+          <button type="button" onclick="closeModal('tx-modal')" class="px-4 py-2 border rounded-lg hover:bg-slate-50">Cancel</button>
+          <button type="submit" id="tx-submit-btn" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium shadow">Submit Transaction</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: BATCH AUDIT TRAIL MODAL -->
+  <div id="lot-history-modal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm hidden items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+      <div class="px-6 py-4 bg-slate-900 text-white flex justify-between items-center">
+        <div>
+          <h3 class="font-bold text-base flex items-center gap-2">
+            <i class="fa-solid fa-clock-rotate-left text-emerald-400"></i> Batch Audit Trail & History
+          </h3>
+          <p id="lot-history-subtitle" class="text-xs text-slate-300 mt-0.5">SKU: ... | Lot: ...</p>
+        </div>
+        <button onclick="closeModal('lot-history-modal')" class="text-slate-400 hover:text-white p-1">
+          <i class="fa-solid fa-xmark text-lg"></i>
+        </button>
+      </div>
+
+      <div class="px-6 py-3 bg-slate-100 border-b border-slate-200 flex flex-wrap items-center justify-between gap-4 text-xs font-medium">
+        <div class="flex items-center gap-6">
+          <div>Total In: <b id="hist-total-in" class="text-emerald-700 text-sm">0</b></div>
+          <div>Total Out: <b id="hist-total-out" class="text-rose-700 text-sm">0</b></div>
+          <div>On Hand: <b id="hist-current-stock" class="text-slate-900 text-sm">0</b></div>
+          <div>Expiry Date: <span id="hist-expiry" class="font-mono text-slate-700">--</span></div>
+        </div>
+        <button id="btn-export-batch-hist" class="bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-3.5 py-1.5 rounded-lg flex items-center gap-1.5 font-semibold shadow-sm transition">
+          <i class="fa-solid fa-file-excel text-emerald-600"></i> Export Batch Log
+        </button>
+      </div>
+
+      <div class="p-6 overflow-y-auto flex-1">
+        <table class="w-full text-left text-sm text-slate-600">
+          <thead class="bg-slate-50 text-slate-500 uppercase text-xs sticky top-0">
+            <tr>
+              <th class="py-2.5 px-3">Tx ID</th>
+              <th class="py-2.5 px-3">Timestamp</th>
+              <th class="py-2.5 px-3">Type</th>
+              <th class="py-2.5 px-3 text-right">Qty</th>
+              <th class="py-2.5 px-3">Operator</th>
+              <th class="py-2.5 px-3 text-center">Status</th>
+              <th class="py-2.5 px-3">Notes</th>
+              <th class="py-2.5 px-3 text-center">Action</th>
+            </tr>
+          </thead>
+          <tbody id="lot-history-tbody" class="divide-y divide-slate-100"></tbody>
+        </table>
+      </div>
+      
+      <div class="px-6 py-3 bg-slate-50 border-t border-slate-200 flex justify-end">
+        <button onclick="closeModal('lot-history-modal')" class="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm font-medium rounded-lg">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: VOID TRANSACTION -->
+  <div id="void-modal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm hidden items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+      <div class="px-6 py-4 bg-rose-600 text-white font-bold flex justify-between items-center">
+        <span>Void / Reverse Transaction</span>
+        <button onclick="closeModal('void-modal')"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <form id="void-form" onsubmit="handleVoidSubmit(event)" class="p-6 space-y-4 text-sm">
+        <input type="hidden" id="void-tx-id">
+        <div class="bg-rose-50 text-rose-800 p-3 rounded-lg border border-rose-200 text-xs">
+          <i class="fa-solid fa-circle-exclamation mr-1"></i>
+          This will void document <b id="void-tx-label">--</b> and create an offset audit reversal.
+        </div>
+        <div>
+          <label class="block font-medium mb-1 text-slate-700">Reason for Void *</label>
+          <textarea id="void-reason" required rows="3" placeholder="e.g. Data entry error / Duplicate record" class="w-full border rounded-lg px-3 py-2 focus:ring-2 focus:ring-rose-500"></textarea>
+        </div>
+        <div class="pt-2 flex justify-end gap-2">
+          <button type="button" onclick="closeModal('void-modal')" class="px-4 py-2 border rounded-lg hover:bg-slate-50">Cancel</button>
+          <button type="submit" id="void-submit-btn" class="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-medium shadow">Confirm Void</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: ADD MASTER SKU -->
+  <div id="item-modal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm hidden items-center justify-center z-50">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
+      <div class="px-6 py-4 bg-slate-900 text-white font-bold flex justify-between items-center">
+        <span>Add Master SKU</span>
+        <button onclick="closeModal('item-modal')"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <form id="item-form" onsubmit="handleItemSubmit(event)" class="p-6 space-y-4 text-sm">
+        <div>
+          <label class="block font-medium mb-1">Item Code (SKU)</label>
+          <input type="text" id="it-code" required placeholder="e.g. 940-002982-00" class="w-full border rounded-lg px-3 py-2 uppercase">
+        </div>
+        <div>
+          <label class="block font-medium mb-1">Item Description</label>
+          <input type="text" id="it-name" required placeholder="e.g. Sequencing Reagent Kit..." class="w-full border rounded-lg px-3 py-2">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block font-medium mb-1">Category</label>
+            <input type="text" id="it-category" placeholder="Reagent, Consumable..." class="w-full border rounded-lg px-3 py-2">
+          </div>
+          <div>
+            <label class="block font-medium mb-1">Unit of Measure</label>
+            <input type="text" id="it-unit" required placeholder="Box, Kit, Pack..." class="w-full border rounded-lg px-3 py-2">
+          </div>
+        </div>
+        <div>
+          <label class="block font-medium mb-1">Reorder Point (Min Stock)</label>
+          <input type="number" id="it-min" value="10" min="0" class="w-full border rounded-lg px-3 py-2">
+          <span class="text-[11px] text-slate-400 mt-1 block">Set to 0 if this item does not require stockout tracking.</span>
+        </div>
+        <div class="pt-2 flex justify-end gap-2">
+          <button type="button" onclick="closeModal('item-modal')" class="px-4 py-2 border rounded-lg hover:bg-slate-50">Cancel</button>
+          <button type="submit" id="item-submit-btn" class="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-medium shadow">Save SKU</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    // DỮ LIỆU CHỈ ĐỌC TỪ GOOGLE SHEETS (SINGLE SOURCE OF TRUTH)
+    let globalItems = [];
+    let currentSkuSummaryList = [];
+    let globalBatches = [];
+    let allTransactions = [];
+    let lowStockAlerts = [];
+    let activeOpenPOs = [];
+    let allPOs = [];
+    let trendChartInstance = null;
+
+    let trendGranularity = 'daily';
+    let currentDrillMonth = null;
+
+    // QUẢN LÝ VIEW VÀ PHÂN TRANG
+    let stockViewMode = 'sku'; // 'sku' | 'lot'
+    let txCurrentPage = 1;
+    let txPageSize = 50;
+    let currentFilteredTx = [];
+
+    function getTodayDateStr() {
+      const d = new Date();
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+
+    function showSyncing(isSyncing) {
+      const el = document.getElementById('sync-indicator');
+      if (!el) return;
+      if (isSyncing) el.classList.remove('hidden');
+      else el.classList.add('hidden');
+    }
+
+    window.onload = function() {
+      loadInitialData();
+    };
+
+    function loadInitialData() {
+      showSyncing(true);
+      google.script.run
+        .withFailureHandler(err => {
+          showSyncing(false);
+          alert('Failed to load data from Google Sheets: ' + err);
+        })
+        .withSuccessHandler(data => {
+          showSyncing(false);
+          applyAppDataFromSheet(data);
+        })
+        .getInitialAppData();
+    }
+
+    /**
+     * NHẬN TRỰC TIẾP GÓI DỮ LIỆU CHUẨN TỪ GOOGLE SHEETS VÀ HIỂN THỊ
+     */
+    function applyAppDataFromSheet(data) {
+      if (!data) return;
+      if (data.error) return alert(data.error);
+
+      document.getElementById('user-email-display').innerText = data.currentUserEmail || 'Signed In';
+
+      globalItems = data.items || [];
+      currentSkuSummaryList = data.skuSummary || [];
+      globalBatches = data.batches || [];
+      allTransactions = data.allTransactions || [];
+      lowStockAlerts = data.lowStockAlerts || [];
+      activeOpenPOs = data.activeOpenPOs || [];
+      allPOs = data.allPOs || [];
+
+      // Cập nhật KPI trực tiếp từ Sheet
+      const kpis = data.dashboard?.kpis || {};
+      document.getElementById('kpi-sku').innerText = kpis.totalSKU ?? globalItems.length;
+      document.getElementById('kpi-stock').innerText = (kpis.totalStock ?? 0).toLocaleString();
+      document.getElementById('kpi-near').innerText = kpis.nearExpiryCount ?? 0;
+      document.getElementById('kpi-expired').innerText = kpis.expiredCount ?? 0;
+      document.getElementById('kpi-reorder').innerText = kpis.reorderCount ?? lowStockAlerts.length;
+      document.getElementById('btn-po-count').innerText = activeOpenPOs.length;
+      const navBadge = document.getElementById('nav-po-badge');
+      if (navBadge) navBadge.innerText = activeOpenPOs.length;
+
+      // Render toàn bộ các bảng từ dữ liệu Sheet
+      try { renderReorderSection(lowStockAlerts); } catch (e) { console.error('Reorder render error:', e); }
+      try { filterStockView(); } catch (e) { console.error('Stock view error:', e); }
+      try { filterOpenPOsTable(); } catch (e) { console.error('Open POs error:', e); }
+      try { filterTxTable(); } catch (e) { console.error('Tx table error:', e); }
+      try { renderRecentTx(data.dashboard?.recentTransactions || allTransactions.slice(0, 10)); } catch (e) { console.error('Recent Tx error:', e); }
+      try { renderItems(globalItems); } catch (e) { console.error('Items error:', e); }
+      try { renderTrendLineChart(); } catch (e) { console.error('Chart error:', e); }
+      try { renderTopConsumed(data.analytics?.topConsumed || []); } catch (e) { console.error('Top consumed error:', e); }
+
+      populateItemSelect(globalItems);
+    }
+
+    function switchTab(tab) {
+      ['dashboard', 'batches', 'open-pos', 'transactions', 'items', 'guide'].forEach(t => {
+        const sec = document.getElementById(`tab-${t}`);
+        if (sec) sec.classList.add('hidden');
+        const navBtn = document.getElementById(`nav-${t}`);
+        if (navBtn) navBtn.classList.remove('bg-slate-800', 'text-white');
+      });
+      const targetSec = document.getElementById(`tab-${tab}`);
+      if (targetSec) targetSec.classList.remove('hidden');
+      const activeBtn = document.getElementById(`nav-${tab}`);
+      if (activeBtn) activeBtn.classList.add('bg-slate-800', 'text-white');
+
+      if (tab === 'transactions') filterTxTable();
+      if (tab === 'open-pos') filterOpenPOsTable();
+      if (tab === 'batches') filterStockView();
+    }
+
+    function toggleRecentTx() {
+      const wrapper = document.getElementById('recent-tx-wrapper');
+      const btn = document.getElementById('btn-toggle-recent');
+      if (wrapper.classList.contains('hidden')) {
+        wrapper.classList.remove('hidden');
+        btn.innerHTML = `<i class="fa-solid fa-eye-slash mr-1"></i> Hide`;
+      } else {
+        wrapper.classList.add('hidden');
+        btn.innerHTML = `<i class="fa-solid fa-eye mr-1"></i> Show`;
+      }
+    }
+
+    // =========================================================================
+    // 1. RENDERING REORDER SECTION (DASHBOARD)
+    // =========================================================================
+    function renderReorderSection(alerts) {
+      const tbody = document.getElementById('reorder-tbody');
+      const badge = document.getElementById('reorder-count-badge');
+      if (!tbody) return;
+
+      const safeAlerts = alerts || [];
+      if (badge) badge.innerText = `${safeAlerts.length} item(s) tracked for stockout`;
+
+      if (safeAlerts.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="8" class="py-4 text-center text-slate-400 text-xs">All monitored inventory levels are above minimum safety thresholds. (Items with Min Stock = 0 are not tracked).</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = safeAlerts.map(a => {
+        const itemCode = String(a.ItemCode || '').trim();
+        const itemName = String(a.ItemName || '').trim();
+        const unit = String(a.Unit || '');
+        const curStock = Number(a.CurrentStock ?? 0);
+        const minStock = Number(a.MinStock ?? 0);
+        const inTransit = Number(a.InTransitQty ?? 0);
+        const netDeficit = Number(a.NetDeficit ?? 0);
+        const deficit = Number(a.Deficit ?? Math.max(0, minStock - curStock));
+        const status = String(a.Status || '');
+        const activePOs = Array.isArray(a.ActivePOs) ? a.ActivePOs : [];
+
+        let statusBadge = '';
+        let poTooltip = '';
+
+        if (status === 'IN_TRANSIT_COVERED') {
+          const poDetails = activePOs.map(p => `${p.poNumber} (${p.remaining} ${unit}, ETA: ${p.eta})`).join(', ');
+          statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-700 border border-indigo-200" title="${poDetails}">
+            <i class="fa-solid fa-plane-arrival mr-1"></i>COVERED BY PO
+          </span>`;
+          poTooltip = `<span class="block text-[11px] text-indigo-600 font-medium truncate max-w-xs" title="${poDetails}">PO: ${poDetails}</span>`;
+        } else if (status === 'IN_TRANSIT_PARTIAL') {
+          statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+            PARTIAL PO COVER
+          </span>`;
+        } else if (status === 'STOCKOUT') {
+          statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-700 border border-rose-200 animate-pulse">
+            CRITICAL STOCKOUT
+          </span>`;
+        } else {
+          statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+            LOW STOCK
+          </span>`;
+        }
+
+        const onOrderDisplay = inTransit > 0 
+          ? `<b class="text-indigo-700">+${inTransit} ${unit}</b>` 
+          : `<span class="text-slate-300">-</span>`;
+
+        const netDeficitDisplay = netDeficit > 0 
+          ? `<span class="text-rose-600 font-bold">+${netDeficit} ${unit}</span>` 
+          : `<span class="text-emerald-600 font-medium"><i class="fa-solid fa-check"></i> 0</span>`;
+
+        const safeCodeForClick = encodeURIComponent(itemCode);
+
+        return `
+          <tr class="hover:bg-amber-50/30">
+            <td class="py-2.5 px-3 font-semibold text-slate-700">${itemCode}</td>
+            <td class="py-2.5 px-3">
+              <div>${itemName}</div>
+              ${poTooltip}
+            </td>
+            <td class="py-2.5 px-3 text-right font-bold ${curStock === 0 ? 'text-rose-600' : 'text-slate-700'}">${curStock} ${unit}</td>
+            <td class="py-2.5 px-3 text-right text-slate-500">${minStock} ${unit}</td>
+            <td class="py-2.5 px-3 text-right">${onOrderDisplay}</td>
+            <td class="py-2.5 px-3 text-right">${netDeficitDisplay}</td>
+            <td class="py-2.5 px-3 text-center">${statusBadge}</td>
+            <td class="py-2.5 px-3 text-center">
+              <button onclick="openLogPOModal('${safeCodeForClick}', ${deficit})" class="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded text-xs font-semibold" title="Log an incoming PO for this SKU">
+                <i class="fa-solid fa-plus mr-0.5"></i> PO
+              </button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    // =========================================================================
+    // 2. STOCK & BATCHES: VIEW SWITCHER (SKU SUMMARY & DETAILED LOT)
+    // =========================================================================
+    function setStockViewMode(mode) {
+      stockViewMode = mode;
+      const btnSku = document.getElementById('btn-view-sku');
+      const btnLot = document.getElementById('btn-view-lot');
+      const wrapperSku = document.getElementById('stock-sku-wrapper');
+      const wrapperLot = document.getElementById('stock-lot-wrapper');
+      const hint = document.getElementById('stock-view-hint');
+      const btnExport = document.getElementById('btn-export-stock');
+
+      if (mode === 'sku') {
+        btnSku.className = 'px-3 py-1.5 rounded-md bg-white shadow-sm text-slate-800 font-bold transition flex items-center gap-1.5';
+        btnLot.className = 'px-3 py-1.5 rounded-md text-slate-500 hover:text-slate-800 transition flex items-center gap-1.5';
+        wrapperSku.classList.remove('hidden');
+        wrapperLot.classList.add('hidden');
+        hint.innerText = 'Click any SKU to inspect lot breakdown';
+        btnExport.innerHTML = `<i class="fa-solid fa-file-excel text-emerald-600"></i> Export SKU Summary (.xlsx)`;
+      } else {
+        btnLot.className = 'px-3 py-1.5 rounded-md bg-white shadow-sm text-slate-800 font-bold transition flex items-center gap-1.5';
+        btnSku.className = 'px-3 py-1.5 rounded-md text-slate-500 hover:text-slate-800 transition flex items-center gap-1.5';
+        wrapperLot.classList.remove('hidden');
+        wrapperSku.classList.add('hidden');
+        hint.innerText = 'Sorted by FEFO (Closest Expiry First)';
+        btnExport.innerHTML = `<i class="fa-solid fa-file-excel text-emerald-600"></i> Export Stock Batches (.xlsx)`;
+      }
+
+      filterStockView();
+    }
+
+    function filterStockView() {
+      const q = (document.getElementById('search-stock')?.value || '').toLowerCase();
+
+      if (stockViewMode === 'sku') {
+        const filtered = currentSkuSummaryList.filter(s => 
+          String(s.itemCode || '').toLowerCase().includes(q) || 
+          String(s.itemName || '').toLowerCase().includes(q) || 
+          String(s.category || '').toLowerCase().includes(q)
+        );
+        renderSkuSummaryTable(filtered);
+      } else {
+        const filtered = globalBatches.filter(b => 
+          String(b.ItemCode || '').toLowerCase().includes(q) || 
+          String(b.ItemName || '').toLowerCase().includes(q) || 
+          String(b.LotNumber || '').toLowerCase().includes(q)
+        );
+        renderBatchesTable(filtered);
+      }
+    }
+
+    function renderSkuSummaryTable(list) {
+      const tbody = document.getElementById('stock-sku-tbody');
+      if (!tbody) return;
+
+      if (!list || list.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="9" class="py-8 text-center text-slate-400">No items found matching criteria.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = list.map(item => {
+        const inTransitBadge = item.inTransit > 0 
+          ? `<span class="px-2 py-0.5 rounded text-xs font-bold bg-indigo-100 text-indigo-700 border border-indigo-200">+${item.inTransit} ${item.unit}</span>` 
+          : `<span class="text-slate-300">-</span>`;
+
+        const onHandClass = item.onHand === 0 ? 'text-rose-600 font-bold' : 'text-slate-800 font-bold';
+        const lotCountBadge = item.lots.length > 0 
+          ? `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">${item.lots.length} lot(s)</span>` 
+          : `<span class="text-xs text-slate-400">0 lot</span>`;
+
+        const safeCode = encodeURIComponent(String(item.itemCode || '').trim());
+
+        let subRowsHtml = '';
+        if (item.lots.length > 0) {
+          subRowsHtml = `
+            <tr id="lots-drawer-${safeCode}" class="hidden bg-slate-50/90 border-b border-slate-200">
+              <td colspan="9" class="p-4">
+                <div class="bg-white rounded-lg border border-slate-200 p-3 shadow-inner">
+                  <div class="text-xs font-bold text-slate-700 mb-2 flex items-center gap-1.5">
+                    <i class="fa-solid fa-barcode text-blue-500"></i> Active Batches for SKU: ${item.itemCode}
+                  </div>
+                  <table class="w-full text-xs text-left text-slate-600">
+                    <thead class="bg-slate-100 text-slate-500 uppercase">
+                      <tr>
+                        <th class="py-1.5 px-3">Lot Number</th>
+                        <th class="py-1.5 px-3">Expiry Date</th>
+                        <th class="py-1.5 px-3">Expiry Status</th>
+                        <th class="py-1.5 px-3 text-right">In</th>
+                        <th class="py-1.5 px-3 text-right">Out</th>
+                        <th class="py-1.5 px-3 text-right font-bold text-slate-900">Current Stock</th>
+                        <th class="py-1.5 px-3 text-center">Audit</th>
+                      </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                      ${item.lots.map(l => {
+                        let b = `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold badge-safe">Valid</span>`;
+                        if (l.expStatus === 'NearExpiry') b = `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold badge-near">Expiring (${l.daysLeft}d)</span>`;
+                        if (l.expStatus === 'Expired') b = `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold badge-expired">Expired</span>`;
+                        if (l.expStatus === 'None') b = `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold badge-none">Non-perishable</span>`;
+                        return `
+                          <tr class="hover:bg-slate-50">
+                            <td class="py-1.5 px-3 font-mono font-bold text-slate-800">${l.LotNumber}</td>
+                            <td class="py-1.5 px-3">${l.ExpiryDate ? String(l.ExpiryDate).slice(0, 10) : 'None'}</td>
+                            <td class="py-1.5 px-3">${b}</td>
+                            <td class="py-1.5 px-3 text-right">${l.QtyIn || 0}</td>
+                            <td class="py-1.5 px-3 text-right">${l.QtyOut || 0}</td>
+                            <td class="py-1.5 px-3 text-right font-bold text-slate-900">${l.CurrentStock || 0}</td>
+                            <td class="py-1.5 px-3 text-center">
+                              <button onclick="openLotHistory('${encodeURIComponent(String(l.ItemCode).trim())}', '${encodeURIComponent(String(l.LotNumber).trim())}')" class="text-blue-600 hover:underline font-semibold">Inspect</button>
+                            </td>
+                          </tr>
+                        `;
+                      }).join('')}
+                    </tbody>
+                  </table>
+                </div>
+              </td>
+            </tr>
+          `;
+        }
+
+        return `
+          <tr class="hover:bg-slate-50 cursor-pointer transition" onclick="toggleSkuDrawer('${safeCode}')">
+            <td class="py-3 px-4 font-semibold text-slate-700 flex items-center gap-2">
+              <i id="icon-drawer-${safeCode}" class="fa-solid fa-chevron-right text-[10px] text-slate-400 transition-transform"></i>
+              ${item.itemCode}
+            </td>
+            <td class="py-3 px-4">${item.itemName}</td>
+            <td class="py-3 px-4 text-xs text-slate-500">${item.category}</td>
+            <td class="py-3 px-4 text-xs font-medium text-slate-600">${item.unit}</td>
+            <td class="py-3 px-4 text-right ${onHandClass}">${item.onHand}</td>
+            <td class="py-3 px-4 text-right">${inTransitBadge}</td>
+            <td class="py-3 px-4 text-right font-bold text-emerald-700">${item.effectiveStock}</td>
+            <td class="py-3 px-4 text-center">${lotCountBadge}</td>
+            <td class="py-3 px-4 text-center" onclick="event.stopPropagation()">
+              <button onclick="toggleSkuDrawer('${safeCode}')" class="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-semibold">
+                ${item.lots.length > 0 ? 'View Lots' : 'No Lots'}
+              </button>
+            </td>
+          </tr>
+          ${subRowsHtml}
+        `;
+      }).join('');
+    }
+
+    function toggleSkuDrawer(safeCode) {
+      const drawer = document.getElementById(`lots-drawer-${safeCode}`);
+      const icon = document.getElementById(`icon-drawer-${safeCode}`);
+      if (!drawer) return;
+
+      if (drawer.classList.contains('hidden')) {
+        drawer.classList.remove('hidden');
+        if (icon) icon.classList.add('rotate-90', 'text-emerald-600');
+      } else {
+        drawer.classList.add('hidden');
+        if (icon) icon.classList.remove('rotate-90', 'text-emerald-600');
+      }
+    }
+
+    function renderBatchesTable(batches) {
+      const tbody = document.getElementById('lots-tbody');
+      if (!tbody) return;
+
+      if (!batches || batches.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="8" class="py-8 text-center text-slate-400">No active stock batches found.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = batches.map(b => {
+        let badge = `<span class="px-2 py-0.5 rounded text-xs font-semibold badge-safe">Valid (> 30d)</span>`;
+        if (b.expStatus === 'None') {
+          badge = `<span class="px-2 py-0.5 rounded text-xs font-semibold badge-none">Non-perishable</span>`;
+        } else if (b.expStatus === 'Expired') {
+          badge = `<span class="px-2 py-0.5 rounded text-xs font-semibold badge-expired">Expired</span>`;
+        } else if (b.expStatus === 'NearExpiry') {
+          badge = `<span class="px-2 py-0.5 rounded text-xs font-semibold badge-near">Expiring (${b.daysLeft}d)</span>`;
+        }
+
+        const rawExp = b.ExpiryDate;
+        const expDisplay = (!rawExp || rawExp === 'N/A' || b.expStatus === 'None') 
+          ? '<span class="text-slate-400">None</span>' 
+          : String(rawExp).slice(0, 10);
+
+        const safeItemCode = encodeURIComponent(String(b.ItemCode || '').trim());
+        const safeLotNumber = encodeURIComponent(String(b.LotNumber || '').trim());
+
+        return `
+          <tr onclick="openLotHistory('${safeItemCode}', '${safeLotNumber}')" class="hover:bg-blue-50/70 cursor-pointer transition group" title="Click to inspect batch history">
+            <td class="py-3 px-4 font-semibold text-slate-700 group-hover:text-blue-600 flex items-center gap-2">
+              <i class="fa-solid fa-clock-rotate-left opacity-0 group-hover:opacity-100 text-blue-500 text-xs transition"></i>
+              ${b.ItemCode}
+            </td>
+            <td class="py-3 px-4">${b.ItemName || ''}</td>
+            <td class="py-3 px-4 font-mono font-medium text-slate-800">${b.LotNumber}</td>
+            <td class="py-3 px-4">${expDisplay}</td>
+            <td class="py-3 px-4">${badge}</td>
+            <td class="py-3 px-4 text-right">${b.QtyIn || 0}</td>
+            <td class="py-3 px-4 text-right">${b.QtyOut || 0}</td>
+            <td class="py-3 px-4 text-right font-bold text-slate-900">${b.CurrentStock || 0}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function exportCurrentStockView() {
+      if (stockViewMode === 'sku') {
+        if (!currentSkuSummaryList || currentSkuSummaryList.length === 0) return alert('No SKU data available.');
+        const exportData = currentSkuSummaryList.map(s => ({
+          'Item Code': s.itemCode,
+          'Item Description': s.itemName,
+          'Category': s.category,
+          'Unit': s.unit,
+          'Min Stock': s.minStock,
+          'Physical On-Hand': s.onHand,
+          'In-Transit (PO)': s.inTransit,
+          'Effective Stock': s.effectiveStock,
+          'Active Lots Count': s.lots.length
+        }));
+
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Inventory_Summary_SKU');
+        XLSX.writeFile(wb, `Inventory_Summary_SKU_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      } else {
+        if (!globalBatches || globalBatches.length === 0) return alert('No batch data available.');
+        const exportData = globalBatches.map(b => ({
+          'Item Code': b.ItemCode,
+          'Item Description': b.ItemName,
+          'Lot Number': b.LotNumber,
+          'Expiry Date': b.ExpiryDate || 'None',
+          'Status': b.expStatus,
+          'Qty In': Number(b.QtyIn) || 0,
+          'Qty Out': Number(b.QtyOut) || 0,
+          'On-Hand Stock': Number(b.CurrentStock) || 0
+        }));
+
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Stock_Batches');
+        XLSX.writeFile(wb, `Inventory_Batches_FEFO_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      }
+    }
+
+    // =========================================================================
+    // 3. IN-TRANSIT POS TABLE & FILTERING
+    // =========================================================================
+    function filterOpenPOsTable() {
+      const q = (document.getElementById('search-open-pos')?.value || '').toLowerCase();
+      const statusFilter = document.getElementById('filter-po-status')?.value || '';
+
+      const filtered = allPOs.filter(p => {
+        const poNum = String(p.poNumber || '').toLowerCase();
+        const itCode = String(p.itemCode || '').toLowerCase();
+        const itName = String(p.itemName || '').toLowerCase();
+        const notes = String(p.notes || '').toLowerCase();
+        const status = String(p.status || 'OPEN').toUpperCase();
+        const rem = Number(p.remaining ?? 0);
+
+        const matchQ = poNum.includes(q) || itCode.includes(q) || itName.includes(q) || notes.includes(q);
+
+        let matchStatus = true;
+        if (statusFilter === 'ACTIVE') matchStatus = (status === 'OPEN' || status === 'PARTIAL') && rem > 0;
+        else if (statusFilter) matchStatus = (status === statusFilter);
+
+        return matchQ && matchStatus;
+      });
+
+      renderOpenPOsTable(filtered);
+    }
+
+    function renderOpenPOsTable(pos) {
+      const tbody = document.getElementById('open-pos-full-tbody');
+      if (!tbody) return;
+
+      if (!pos || pos.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="11" class="py-8 text-center text-slate-400">No Purchase Orders found matching filter.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = pos.map(p => {
+        const poId = String(p.poId || '').trim();
+        const poNum = String(p.poNumber || '').trim();
+        const itCode = String(p.itemCode || '').trim();
+        const itName = String(p.itemName || '');
+        const status = String(p.status || 'OPEN').toUpperCase();
+        const ordered = Number(p.qtyOrdered ?? 0);
+        const received = Number(p.qtyReceived ?? 0);
+        const remaining = Number(p.remaining ?? 0);
+        const eta = p.eta ? String(p.eta).slice(0, 10) : 'TBD';
+        const notes = String(p.notes || '-');
+        const created = p.createdAt ? String(p.createdAt).slice(0, 10) : '-';
+
+        let statusBadge = '';
+        if (status === 'OPEN') {
+          statusBadge = `<span class="px-2 py-0.5 rounded text-[11px] font-bold bg-indigo-100 text-indigo-700 border border-indigo-200">OPEN</span>`;
+        } else if (status === 'PARTIAL') {
+          statusBadge = `<span class="px-2 py-0.5 rounded text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-200">PARTIAL</span>`;
+        } else if (status === 'RECEIVED') {
+          statusBadge = `<span class="px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">RECEIVED</span>`;
+        } else {
+          statusBadge = `<span class="px-2 py-0.5 rounded text-[11px] font-bold bg-slate-100 text-slate-500 border border-slate-200">CANCELLED</span>`;
+        }
+
+        const isActionable = (status === 'OPEN' || status === 'PARTIAL') && remaining > 0;
+        const targetIdentifier = poId || poNum;
+
+        return `
+          <tr class="hover:bg-slate-50 ${status === 'CANCELLED' ? 'text-slate-400 bg-slate-50/50' : ''}">
+            <td class="py-3 px-3 font-mono font-bold text-indigo-700">${poNum}</td>
+            <td class="py-3 px-3 font-semibold text-slate-700">${itCode}</td>
+            <td class="py-3 px-3 text-xs max-w-xs truncate">${itName}</td>
+            <td class="py-3 px-3 text-center">${statusBadge}</td>
+            <td class="py-3 px-3 text-right font-medium text-slate-800">${ordered}</td>
+            <td class="py-3 px-3 text-right font-medium text-emerald-700">${received}</td>
+            <td class="py-3 px-3 text-right font-bold ${remaining > 0 ? 'text-indigo-900' : 'text-slate-400'}">${remaining}</td>
+            <td class="py-3 px-3 text-xs font-mono">${eta}</td>
+            <td class="py-3 px-3 text-xs text-slate-500 max-w-xs truncate">${notes}</td>
+            <td class="py-3 px-3 text-xs text-slate-400 font-mono">${created}</td>
+            <td class="py-3 px-3 text-center space-x-2">
+              ${isActionable ? `
+                <button onclick="quickReceivePO('${encodeURIComponent(targetIdentifier)}', '${encodeURIComponent(itCode)}', '${encodeURIComponent(poNum)}', ${remaining})" class="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded text-xs font-semibold" title="Fulfill / Receive this PO">
+                  <i class="fa-solid fa-box-open mr-1"></i>Receive
+                </button>
+                <button onclick="cancelPO('${encodeURIComponent(targetIdentifier)}')" class="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded text-xs font-semibold" title="Cancel this PO">
+                  <i class="fa-solid fa-xmark mr-0.5"></i>Cancel
+                </button>
+              ` : '<span class="text-xs text-slate-400">-</span>'}
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    // =========================================================================
+    // 4. TRANSACTION LEDGER & PAGINATION
+    // =========================================================================
+    function filterTxTable() {
+      const q = (document.getElementById('search-tx')?.value || '').toLowerCase();
+      const type = document.getElementById('filter-tx-type')?.value || '';
+
+      currentFilteredTx = allTransactions.filter(t => {
+        const matchQ = String(t.TxID || '').toLowerCase().includes(q) || 
+                       String(t.ItemCode || '').toLowerCase().includes(q) || 
+                       String(t.ItemName || '').toLowerCase().includes(q) || 
+                       String(t.LotNumber || '').toLowerCase().includes(q) || 
+                       String(t.Note || '').toLowerCase().includes(q);
+
+        let matchType = true;
+        if (type === 'IN') matchType = t.Type === 'IN';
+        if (type === 'OUT') matchType = t.Type === 'OUT';
+        if (type === 'VOID') matchType = t.Status === 'VOIDED' || String(t.Type || '').startsWith('VOID_');
+
+        return matchQ && matchType;
+      });
+
+      txCurrentPage = 1;
+      renderPaginatedTxTable();
+    }
+
+    function changeTxPageSize(newSize) {
+      txPageSize = Number(newSize) || 50;
+      txCurrentPage = 1;
+      renderPaginatedTxTable();
+    }
+
+    function goToTxPage(pageNum) {
+      const totalPages = Math.ceil(currentFilteredTx.length / txPageSize) || 1;
+      if (pageNum < 1 || pageNum > totalPages) return;
+      txCurrentPage = pageNum;
+      renderPaginatedTxTable();
+    }
+
+    function renderPaginatedTxTable() {
+      const tbody = document.getElementById('full-tx-tbody');
+      if (!tbody) return;
+
+      const totalItems = currentFilteredTx.length;
+      const totalPages = Math.ceil(totalItems / txPageSize) || 1;
+
+      if (txCurrentPage > totalPages) txCurrentPage = totalPages;
+
+      const startIndex = (txCurrentPage - 1) * txPageSize;
+      const endIndex = Math.min(startIndex + txPageSize, totalItems);
+      const pageData = currentFilteredTx.slice(startIndex, endIndex);
+
+      if (pageData.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="11" class="py-8 text-center text-slate-400">No transaction records found matching criteria.</td></tr>`;
+        document.getElementById('tx-pagination-info').innerText = `Showing 0 to 0 of 0 entries`;
+        document.getElementById('tx-pagination-controls').innerHTML = '';
+        return;
+      }
+
+      tbody.innerHTML = pageData.map(t => {
+        const isVoided = t.Status === 'VOIDED' || String(t.Type || '').startsWith('VOID_');
+        return `
+          <tr class="hover:bg-slate-50 ${isVoided ? 'bg-slate-50 text-slate-400' : ''}">
+            <td class="py-3 px-3 font-mono text-xs font-semibold">${t.TxID || ''}</td>
+            <td class="py-3 px-3 text-xs text-slate-400">${t.Timestamp || ''}</td>
+            <td class="py-3 px-3">
+              <span class="px-2 py-0.5 rounded text-xs font-bold ${t.Type === 'IN' ? 'bg-emerald-100 text-emerald-700' : (t.Type === 'OUT' ? 'bg-rose-100 text-rose-700' : 'bg-slate-200 text-slate-600')}">${t.Type || ''}</span>
+            </td>
+            <td class="py-3 px-3 font-semibold text-slate-700">${t.ItemCode || ''}</td>
+            <td class="py-3 px-3 text-xs">${t.ItemName || ''}</td>
+            <td class="py-3 px-3 font-mono text-xs">${t.LotNumber || ''}</td>
+            <td class="py-3 px-3 text-right font-bold">${t.Qty || 0} <span class="text-xs font-normal text-slate-400">${t.Unit || ''}</span></td>
+            <td class="py-3 px-3 text-xs text-slate-500">${t.Operator || ''}</td>
+            <td class="py-3 px-3 text-center">
+              <span class="px-2 py-0.5 rounded text-[10px] font-bold ${isVoided ? 'badge-voided' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}">${t.Status || 'ACTIVE'}</span>
+            </td>
+            <td class="py-3 px-3 text-xs text-slate-500">${t.Note || '-'} ${t.VoidReason ? `<span class="block text-rose-600 font-semibold">[Void: ${t.VoidReason}]</span>` : ''}</td>
+            <td class="py-3 px-3 text-center">
+              ${(!isVoided) ? `
+                <button onclick="openVoidModal('${t.TxID}')" class="px-2 py-1 bg-rose-50 text-rose-600 hover:bg-rose-100 rounded text-xs font-semibold transition"><i class="fa-solid fa-ban mr-1"></i>Void</button>
+              ` : '<span class="text-xs text-slate-400">Archived</span>'}
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      document.getElementById('tx-pagination-info').innerText = `Showing ${startIndex + 1} to ${endIndex} of ${totalItems.toLocaleString()} entries`;
+
+      let paginationHtml = '';
+      paginationHtml += `<button onclick="goToTxPage(1)" ${txCurrentPage === 1 ? 'disabled class="opacity-40 cursor-not-allowed px-2 py-1 rounded border border-slate-300"' : 'class="hover:bg-slate-200 px-2 py-1 rounded border border-slate-300"'}><i class="fa-solid fa-angles-left"></i></button>`;
+      paginationHtml += `<button onclick="goToTxPage(${txCurrentPage - 1})" ${txCurrentPage === 1 ? 'disabled class="opacity-40 cursor-not-allowed px-2.5 py-1 rounded border border-slate-300"' : 'class="hover:bg-slate-200 px-2.5 py-1 rounded border border-slate-300"'}><i class="fa-solid fa-chevron-left"></i></button>`;
+
+      paginationHtml += `<span class="px-3 py-1 font-bold text-slate-800 bg-white border border-slate-300 rounded">Page ${txCurrentPage} / ${totalPages}</span>`;
+
+      paginationHtml += `<button onclick="goToTxPage(${txCurrentPage + 1})" ${txCurrentPage === totalPages ? 'disabled class="opacity-40 cursor-not-allowed px-2.5 py-1 rounded border border-slate-300"' : 'class="hover:bg-slate-200 px-2.5 py-1 rounded border border-slate-300"'}><i class="fa-solid fa-chevron-right"></i></button>`;
+      paginationHtml += `<button onclick="goToTxPage(${totalPages})" ${txCurrentPage === totalPages ? 'disabled class="opacity-40 cursor-not-allowed px-2 py-1 rounded border border-slate-300"' : 'class="hover:bg-slate-200 px-2 py-1 rounded border border-slate-300"'}><i class="fa-solid fa-angles-right"></i></button>`;
+
+      document.getElementById('tx-pagination-controls').innerHTML = paginationHtml;
+    }
+
+    // =========================================================================
+    // 5. DASHBOARD CHARTS & RECENT TX
+    // =========================================================================
+    function renderRecentTx(txs) {
+      const tbody = document.getElementById('dashboard-tx-table');
+      if (!tbody) return;
+      if (!txs || txs.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="10" class="py-4 text-center text-slate-400 text-xs">No recent activity found.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = txs.map(tx => {
+        const isVoided = tx.Status === 'VOIDED' || String(tx.Type || '').startsWith('VOID_');
+        return `
+          <tr class="hover:bg-slate-50 ${isVoided ? 'bg-slate-50/70 text-slate-400' : ''}">
+            <td class="py-2.5 px-3 font-mono text-xs font-semibold">${tx.TxID}</td>
+            <td class="py-2.5 px-3 text-xs text-slate-400">${tx.Timestamp}</td>
+            <td class="py-2.5 px-3">
+              <span class="px-2 py-0.5 rounded text-[11px] font-bold ${tx.Type === 'IN' ? 'bg-emerald-100 text-emerald-700' : (tx.Type === 'OUT' ? 'bg-rose-100 text-rose-700' : 'bg-slate-200 text-slate-600')}">${tx.Type}</span>
+            </td>
+            <td class="py-2.5 px-3 font-semibold text-slate-700">${tx.ItemCode}</td>
+            <td class="py-2.5 px-3 text-xs">${tx.ItemName}</td>
+            <td class="py-2.5 px-3 font-mono text-xs">${tx.LotNumber}</td>
+            <td class="py-2.5 px-3 text-right font-bold">${tx.Qty} ${tx.Unit}</td>
+            <td class="py-2.5 px-3 text-xs text-slate-500">${tx.Operator}</td>
+            <td class="py-2.5 px-3 text-center">
+              <span class="px-2 py-0.5 rounded text-[10px] font-bold ${isVoided ? 'badge-voided' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}">${tx.Status || 'ACTIVE'}</span>
+            </td>
+            <td class="py-2.5 px-3 text-center">
+              ${(!isVoided) ? `
+                <button onclick="openVoidModal('${tx.TxID}')" class="text-rose-600 hover:text-rose-800 p-1 text-xs font-semibold" title="Void Transaction"><i class="fa-solid fa-ban mr-1"></i>Void</button>
+              ` : '-'}
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function setTrendGranularity(grain) {
+      trendGranularity = grain;
+      currentDrillMonth = null;
+
+      ['daily', 'monthly', 'yearly'].forEach(g => {
+        const btn = document.getElementById(`btn-gran-${g}`);
+        if (g === grain) {
+          btn.className = 'px-2.5 py-1 rounded-md bg-white shadow-sm text-slate-800 font-bold transition';
+        } else {
+          btn.className = 'px-2.5 py-1 rounded-md text-slate-500 hover:text-slate-800 transition';
+        }
+      });
+
+      renderTrendLineChart();
+    }
+
+    function drillDownToMonth(monthStr) {
+      currentDrillMonth = monthStr;
+      trendGranularity = 'daily';
+
+      ['daily', 'monthly', 'yearly'].forEach(g => {
+        const btn = document.getElementById(`btn-gran-${g}`);
+        btn.className = g === 'daily'
+          ? 'px-2.5 py-1 rounded-md bg-white shadow-sm text-slate-800 font-bold transition'
+          : 'px-2.5 py-1 rounded-md text-slate-500 hover:text-slate-800 transition';
+      });
+
+      renderTrendLineChart();
+    }
+
+    function drillUpTrend() {
+      if (currentDrillMonth) {
+        currentDrillMonth = null;
+        setTrendGranularity('monthly');
+      } else if (trendGranularity === 'daily') {
+        setTrendGranularity('monthly');
+      } else if (trendGranularity === 'monthly') {
+        setTrendGranularity('yearly');
+      }
+    }
+
+    function renderTrendLineChart() {
+      const canvas = document.getElementById('trendChart');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const statusEl = document.getElementById('chart-drill-status');
+      const drillUpBtn = document.getElementById('btn-drill-up');
+
+      const dailyMap = {};
+      const monthlyMap = {};
+      const yearlyMap = {};
+
+      allTransactions.forEach(t => {
+        if (t.Status === 'VOIDED' || String(t.Type || '').startsWith('VOID_')) return;
+        const rawTs = String(t.Timestamp || '').trim();
+        const dateStr = rawTs.slice(0, 10);
+        if (!dateStr || dateStr.length < 10) return;
+
+        const monthStr = dateStr.slice(0, 7);
+        const yearStr = dateStr.slice(0, 4);
+
+        const qty = Number(t.Qty) || 0;
+        const isIN = t.Type === 'IN';
+        const isOUT = t.Type === 'OUT';
+
+        if (!dailyMap[dateStr]) dailyMap[dateStr] = { inQty: 0, outQty: 0 };
+        if (isIN) dailyMap[dateStr].inQty += qty;
+        if (isOUT) dailyMap[dateStr].outQty += qty;
+
+        if (!monthlyMap[monthStr]) monthlyMap[monthStr] = { inQty: 0, outQty: 0 };
+        if (isIN) monthlyMap[monthStr].inQty += qty;
+        if (isOUT) monthlyMap[monthStr].outQty += qty;
+
+        if (!yearlyMap[yearStr]) yearlyMap[yearStr] = { inQty: 0, outQty: 0 };
+        if (isIN) yearlyMap[yearStr].inQty += qty;
+        if (isOUT) yearlyMap[yearStr].outQty += qty;
+      });
+
+      let labels = [];
+      let inData = [];
+      let outData = [];
+
+      if (trendGranularity === 'daily') {
+        if (currentDrillMonth) {
+          statusEl.innerHTML = `<span class="text-blue-600 font-bold">Drill-down:</span> Daily Trend in <b>${currentDrillMonth}</b>`;
+          drillUpBtn.classList.remove('hidden');
+          labels = Object.keys(dailyMap).filter(d => d.startsWith(currentDrillMonth)).sort();
+        } else {
+          statusEl.innerText = 'Viewing: Daily Trend (Latest activity)';
+          drillUpBtn.classList.add('hidden');
+          labels = Object.keys(dailyMap).sort().slice(-30);
+        }
+
+        if (labels.length === 0) {
+          labels = [getTodayDateStr()];
+          inData = [0];
+          outData = [0];
+        } else {
+          inData = labels.map(d => dailyMap[d]?.inQty || 0);
+          outData = labels.map(d => dailyMap[d]?.outQty || 0);
+        }
+      } else if (trendGranularity === 'monthly') {
+        statusEl.innerText = 'Viewing: Monthly Aggregation (Click month to drill down)';
+        drillUpBtn.classList.add('hidden');
+
+        labels = Object.keys(monthlyMap).sort();
+        if (labels.length === 0) {
+          labels = [getTodayDateStr().slice(0, 7)];
+          inData = [0];
+          outData = [0];
+        } else {
+          inData = labels.map(m => monthlyMap[m]?.inQty || 0);
+          outData = labels.map(m => monthlyMap[m]?.outQty || 0);
+        }
+      } else if (trendGranularity === 'yearly') {
+        statusEl.innerText = 'Viewing: Yearly Overview';
+        drillUpBtn.classList.add('hidden');
+
+        labels = Object.keys(yearlyMap).sort();
+        if (labels.length === 0) {
+          labels = [new Date().getFullYear().toString()];
+          inData = [0];
+          outData = [0];
+        } else {
+          inData = labels.map(y => yearlyMap[y]?.inQty || 0);
+          outData = labels.map(y => yearlyMap[y]?.outQty || 0);
+        }
+      }
+
+      const totalIn = inData.reduce((a, b) => a + b, 0);
+      const totalOut = outData.reduce((a, b) => a + b, 0);
+      const netMovement = totalIn - totalOut;
+
+      const netEl = document.getElementById('chart-net-movement');
+      if (netEl) {
+        netEl.innerHTML = `
+          In: <b class="text-emerald-600">${totalIn.toLocaleString()}</b> | 
+          Out: <b class="text-rose-600">${totalOut.toLocaleString()}</b> | 
+          Net: <b class="${netMovement >= 0 ? 'text-emerald-700' : 'text-rose-700'}">${netMovement >= 0 ? '+' : ''}${netMovement.toLocaleString()}</b> units
+        `;
+      }
+
+      if (trendChartInstance) trendChartInstance.destroy();
+
+      trendChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: 'Inbound (IN)',
+              data: inData,
+              borderColor: '#10b981',
+              backgroundColor: 'rgba(16, 185, 129, 0.08)',
+              borderWidth: 2.5,
+              tension: 0.35,
+              fill: true,
+              pointRadius: labels.length > 25 ? 3 : 4,
+              pointHoverRadius: 6,
+              pointBackgroundColor: '#10b981'
+            },
+            {
+              label: 'Outbound (OUT)',
+              data: outData,
+              borderColor: '#f43f5e',
+              backgroundColor: 'rgba(244, 63, 94, 0.08)',
+              borderWidth: 2.5,
+              tension: 0.35,
+              fill: true,
+              pointRadius: labels.length > 25 ? 3 : 4,
+              pointHoverRadius: 6,
+              pointBackgroundColor: '#f43f5e'
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { position: 'top', align: 'end', labels: { boxWidth: 12, font: { size: 11, weight: 'bold' } } },
+            tooltip: {
+              backgroundColor: '#0f172a',
+              titleFont: { size: 12, weight: 'bold' },
+              padding: 10,
+              cornerRadius: 8,
+              callbacks: {
+                footer: function(tooltipItems) {
+                  let inVal = 0;
+                  let outVal = 0;
+                  tooltipItems.forEach(i => {
+                    if (i.datasetIndex === 0) inVal = i.raw;
+                    if (i.datasetIndex === 1) outVal = i.raw;
+                  });
+                  const diff = inVal - outVal;
+                  return `Net Movement: ${diff >= 0 ? '+' : ''}${diff.toLocaleString()} units`;
+                }
+              }
+            }
+          },
+          scales: {
+            y: { beginAtZero: true, grid: { color: '#f1f5f9' }, ticks: { precision: 0 } },
+            x: { grid: { display: false }, ticks: { maxRotation: 45, minRotation: 0, font: { size: 10 } } }
+          },
+          onClick: (e, elements) => {
+            if (elements && elements.length > 0) {
+              const clickedIdx = elements[0].index;
+              const clickedLabel = labels[clickedIdx];
+              if (trendGranularity === 'monthly') drillDownToMonth(clickedLabel);
+              else if (trendGranularity === 'yearly') setTrendGranularity('monthly');
+            }
+          }
+        }
+      });
+    }
+
+    function renderTopConsumed(list) {
+      const container = document.getElementById('top-consumed-list');
+      if (!list || list.length === 0) {
+        container.innerHTML = `<div class="text-xs text-slate-400 py-4 text-center">No outward consumption records yet.</div>`;
+        return;
+      }
+
+      container.innerHTML = list.map((item, idx) => `
+        <div class="flex items-center justify-between text-xs p-2 rounded-lg bg-slate-50 border border-slate-100">
+          <div class="truncate pr-2">
+            <div class="font-bold text-slate-700 truncate">${idx + 1}. ${item.itemCode}</div>
+            <div class="text-[11px] text-slate-400 truncate">${item.name}</div>
+          </div>
+          <div class="font-bold text-slate-900 whitespace-nowrap">${item.qty} ${item.unit}</div>
+        </div>
+      `).join('');
+    }
+
+    // =========================================================================
+    // 6. MODALS & TRANSACTIONS LOGIC (100% SHEET SSOT SYNC)
+    // =========================================================================
+    function quickReceivePO(encodedPoId, encodedItemCode, encodedPoNumber, remainingQty) {
+      const poId = decodeURIComponent(encodedPoId);
+      const itemCode = decodeURIComponent(encodedItemCode);
+
+      openTxModal('IN');
+      const itemSelect = document.getElementById('tx-item');
+      itemSelect.value = itemCode;
+      onItemChanged(itemCode);
+
+      setTimeout(() => {
+        const poSelect = document.getElementById('tx-po-link');
+        poSelect.value = poId;
+        onPoLinkChanged();
+        document.getElementById('tx-qty').value = remainingQty;
+      }, 50);
+    }
+
+    function openLogPOModal(preSelectSku, suggestedQty) {
+      document.getElementById('log-po-form').reset();
+      const skuSelect = document.getElementById('po-item-code');
+      skuSelect.innerHTML = '<option value="">-- Select SKU --</option>' + globalItems.map(it => 
+        `<option value="${it.ItemCode}" data-name="${it.ItemName}">${it.ItemCode} - ${it.ItemName}</option>`
+      ).join('');
+
+      if (preSelectSku) {
+        skuSelect.value = decodeURIComponent(preSelectSku);
+      }
+      if (suggestedQty) {
+        document.getElementById('po-qty').value = suggestedQty;
+      }
+      
+      document.getElementById('log-po-modal').classList.remove('hidden');
+      document.getElementById('log-po-modal').classList.add('flex');
+    }
+
+    function handleLogPOSubmit(e) {
+      e.preventDefault();
+      const skuSelect = document.getElementById('po-item-code');
+      const opt = skuSelect.options[skuSelect.selectedIndex];
+      const submitBtn = document.getElementById('po-submit-btn');
+
+      const payload = {
+        poNumber: document.getElementById('po-number').value.trim().toUpperCase(),
+        itemCode: skuSelect.value.trim().toUpperCase(),
+        itemName: opt ? opt.getAttribute('data-name') : '',
+        qtyOrdered: Number(document.getElementById('po-qty').value),
+        eta: document.getElementById('po-eta').value,
+        notes: document.getElementById('po-notes').value
+      };
+
+      submitBtn.disabled = true;
+      submitBtn.innerText = 'Saving to Sheet...';
+      showSyncing(true);
+
+      google.script.run
+        .withFailureHandler(err => {
+          submitBtn.disabled = false;
+          submitBtn.innerText = 'Save In-Transit PO';
+          showSyncing(false);
+          alert('Failed to log PO: ' + err);
+        })
+        .withSuccessHandler(res => {
+          submitBtn.disabled = false;
+          submitBtn.innerText = 'Save In-Transit PO';
+          showSyncing(false);
+          if (!res.success) {
+            alert('Error: ' + res.error);
+          } else {
+            closeModal('log-po-modal');
+            applyAppDataFromSheet(res.appData);
+          }
+        })
+        .createOpenPO(payload);
+    }
+
+    function cancelPO(encodedPoId) {
+      const poId = decodeURIComponent(encodedPoId);
+      const reason = prompt('Enter reason for cancelling this in-transit PO:');
+      if (!reason) return;
+
+      showSyncing(true);
+      google.script.run
+        .withFailureHandler(err => {
+          showSyncing(false);
+          alert('Failed: ' + err);
+        })
+        .withSuccessHandler(res => {
+          showSyncing(false);
+          if (!res.success) {
+            alert('Error: ' + res.error);
+          } else {
+            applyAppDataFromSheet(res.appData);
+          }
+        })
+        .cancelOpenPO(poId, reason);
+    }
+
+    function openTxModal(type) {
+      document.getElementById('tx-form').reset();
+      document.getElementById('tx-type').value = type;
+
+      const todayStr = getTodayDateStr();
+      const dateInput = document.getElementById('tx-date');
+      dateInput.value = todayStr;
+      dateInput.removeAttribute('min');
+      document.getElementById('tx-date-hint').innerText = 'Defaults to today. Can be adjusted.';
+
+      const header = document.getElementById('tx-modal-header');
+      const title = document.getElementById('tx-modal-title');
+      const submitBtn = document.getElementById('tx-submit-btn');
+
+      const inFields = document.getElementById('in-lot-fields');
+      const outFields = document.getElementById('out-lot-fields');
+      const poContainer = document.getElementById('po-link-container');
+      const qtyInput = document.getElementById('tx-qty');
+      const qtyHint = document.getElementById('qty-limit-hint');
+
+      qtyInput.removeAttribute('max');
+      qtyHint.innerText = '';
+      submitBtn.disabled = false;
+      submitBtn.innerText = 'Submit Transaction';
+
+      if (type === 'IN') {
+        header.className = 'px-6 py-4 bg-emerald-600 text-white font-bold flex justify-between items-center';
+        submitBtn.className = 'px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium shadow';
+        title.innerText = 'Stock Inbound (IN)';
+        inFields.classList.remove('hidden');
+        outFields.classList.add('hidden');
+        document.getElementById('tx-lot-out').required = false;
+
+        poContainer.classList.remove('hidden');
+        populatePOLinkDropdown();
+      } else {
+        header.className = 'px-6 py-4 bg-rose-600 text-white font-bold flex justify-between items-center';
+        submitBtn.className = 'px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-medium shadow';
+        title.innerText = 'Stock Outbound (OUT)';
+        inFields.classList.add('hidden');
+        outFields.classList.remove('hidden');
+        poContainer.classList.add('hidden');
+        document.getElementById('tx-lot-out').required = true;
+        
+        document.getElementById('tx-lot-out').innerHTML = '<option value="">-- Choose item first --</option>';
+        document.getElementById('tx-expiry-out').value = '';
+        document.getElementById('out-stock-hint').innerText = '';
+      }
+
+      document.getElementById('tx-modal').classList.remove('hidden');
+      document.getElementById('tx-modal').classList.add('flex');
+    }
+
+    function populatePOLinkDropdown(filterSku) {
+      const poSelect = document.getElementById('tx-po-link');
+      const hint = document.getElementById('po-link-hint');
+      
+      let list = activeOpenPOs.filter(p => p.remaining > 0);
+      if (filterSku) {
+        list = list.filter(p => String(p.itemCode || '').trim().toUpperCase() === String(filterSku).trim().toUpperCase());
+      }
+
+      hint.innerText = `${list.length} open PO(s)`;
+
+      if (list.length === 0) {
+        poSelect.innerHTML = '<option value="">-- None (No open POs found) --</option>';
+        return;
+      }
+
+      poSelect.innerHTML = '<option value="">-- None (Direct / Unplanned Delivery) --</option>' + list.map(p => 
+        `<option value="${p.poId || p.poNumber}" data-po="${p.poNumber}" data-sku="${p.itemCode}" data-rem="${p.remaining}">
+          PO: ${p.poNumber} | SKU: ${p.itemCode} (${p.remaining} remaining, ETA: ${p.eta})
+        </option>`
+      ).join('');
+
+      if (list.length === 1 && filterSku) {
+        poSelect.selectedIndex = 1;
+        onPoLinkChanged();
+      }
+    }
+
+    function onPoLinkChanged() {
+      const poSelect = document.getElementById('tx-po-link');
+      const opt = poSelect.options[poSelect.selectedIndex];
+      const itemSelect = document.getElementById('tx-item');
+      const noteInput = document.getElementById('tx-note');
+      const qtyInput = document.getElementById('tx-qty');
+      const qtyHint = document.getElementById('qty-limit-hint');
+
+      if (opt && opt.value) {
+        const poNumber = opt.getAttribute('data-po');
+        const sku = opt.getAttribute('data-sku');
+        const remaining = Number(opt.getAttribute('data-rem')) || 0;
+
+        if (sku && itemSelect.value !== sku) {
+          itemSelect.value = sku;
+        }
+        
+        qtyInput.value = remaining;
+        qtyInput.max = remaining;
+        qtyHint.innerText = `Max allowed: ${remaining}`;
+        noteInput.value = `Fulfills PO: ${poNumber}`;
+      } else {
+        qtyInput.removeAttribute('max');
+        qtyHint.innerText = '';
+      }
+    }
+
+    function onItemChanged(itemCode) {
+      const type = document.getElementById('tx-type').value;
+
+      if (type === 'IN') {
+        populatePOLinkDropdown(itemCode);
+        return;
+      }
+
+      const lotSelect = document.getElementById('tx-lot-out');
+      document.getElementById('tx-expiry-out').value = '';
+      document.getElementById('out-stock-hint').innerText = '';
+
+      if (!itemCode) {
+        lotSelect.innerHTML = '<option value="">-- Choose item first --</option>';
+        return;
+      }
+
+      const availableLots = globalBatches.filter(b => 
+        String(b.ItemCode || '').trim().toUpperCase() === String(itemCode).trim().toUpperCase() && 
+        Number(b.CurrentStock) > 0
+      );
+
+      if (availableLots.length === 0) {
+        lotSelect.innerHTML = '<option value="">⚠️ Out of stock (No active batches)</option>';
+        return;
+      }
+
+      lotSelect.innerHTML = '<option value="">-- Select lot --</option>' + availableLots.map(b => {
+        const expLabel = (b.expStatus === 'None' || !b.ExpiryDate || b.ExpiryDate === 'N/A') ? 'No Expiry' : String(b.ExpiryDate).slice(0, 10);
+        return `
+          <option value="${b.LotNumber}" data-expiry="${expLabel}" data-stock="${b.CurrentStock}">
+            Lot: ${b.LotNumber} (Stock: ${b.CurrentStock}) - Exp: ${expLabel}
+          </option>
+        `;
+      }).join('');
+    }
+
+    function onLotOutChanged() {
+      const lotSelect = document.getElementById('tx-lot-out');
+      const opt = lotSelect.options[lotSelect.selectedIndex];
+      const expiryInput = document.getElementById('tx-expiry-out');
+      const hint = document.getElementById('out-stock-hint');
+      const qtyInput = document.getElementById('tx-qty');
+      const dateInput = document.getElementById('tx-date');
+      const dateHint = document.getElementById('tx-date-hint');
+      const itemCode = document.getElementById('tx-item').value.trim().toUpperCase();
+
+      if (opt && opt.value) {
+        const lotNumber = opt.value.trim().toUpperCase();
+        const expiry = opt.getAttribute('data-expiry');
+        const stock = Number(opt.getAttribute('data-stock'));
+        expiryInput.value = expiry;
+        hint.innerHTML = `<span class="text-emerald-600 font-medium"><i class="fa-solid fa-circle-check"></i> Available Lot Stock: <b>${stock}</b></span>`;
+        qtyInput.max = stock;
+
+        let earliestIn = null;
+        allTransactions.forEach(t => {
+          if (String(t.ItemCode || '').trim().toUpperCase() === itemCode && 
+              String(t.LotNumber || '').trim().toUpperCase() === lotNumber && 
+              t.Type === 'IN' && 
+              t.Status !== 'VOIDED') {
+            const dStr = String(t.Timestamp || '').trim().slice(0, 10);
+            if (!earliestIn || dStr < earliestIn) earliestIn = dStr;
+          }
+        });
+
+        if (earliestIn) {
+          dateInput.min = earliestIn;
+          dateHint.innerHTML = `<span class="text-amber-600 font-semibold"><i class="fa-solid fa-triangle-exclamation"></i> Lot received on <b>${earliestIn}</b>. Out date cannot be earlier.</span>`;
+        } else {
+          dateInput.removeAttribute('min');
+          dateHint.innerText = 'Defaults to today. Can be adjusted.';
+        }
+      } else {
+        expiryInput.value = '';
+        hint.innerText = '';
+        qtyInput.removeAttribute('max');
+        dateInput.removeAttribute('min');
+        dateHint.innerText = 'Defaults to today. Can be adjusted.';
+      }
+    }
+
+    function handleTransactionSubmit(e) {
+      e.preventDefault();
+      const type = document.getElementById('tx-type').value;
+      const select = document.getElementById('tx-item');
+      const opt = select.options[select.selectedIndex];
+      const qty = Number(document.getElementById('tx-qty').value);
+      const txDate = document.getElementById('tx-date').value;
+      const submitBtn = document.getElementById('tx-submit-btn');
+
+      if (!txDate) return alert('Please specify a valid transaction date.');
+
+      let lotNumber = '';
+      let expiryDate = '';
+      let linkedPoId = '';
+      let linkedPoNumber = '';
+
+      if (type === 'IN') {
+        const lotVal = document.getElementById('tx-lot-in').value.trim();
+        lotNumber = lotVal ? lotVal.toUpperCase() : 'N/A';
+        expiryDate = document.getElementById('tx-expiry-in').value || 'N/A';
+
+        const poSelect = document.getElementById('tx-po-link');
+        const poOpt = poSelect.options[poSelect.selectedIndex];
+        if (poOpt && poOpt.value) {
+          linkedPoId = poOpt.value;
+          linkedPoNumber = poOpt.getAttribute('data-po');
+
+          const maxAllowed = Number(poOpt.getAttribute('data-rem')) || 0;
+          if (maxAllowed > 0 && qty > maxAllowed) {
+            return alert(`Over-receipt Error: PO [${linkedPoNumber}] only has ${maxAllowed} unit(s) remaining!`);
+          }
+        }
+      } else {
+        lotNumber = document.getElementById('tx-lot-out').value;
+        const optLot = document.getElementById('tx-lot-out').options[document.getElementById('tx-lot-out').selectedIndex];
+        expiryDate = optLot ? optLot.getAttribute('data-expiry') : 'N/A';
+        if (!lotNumber) return alert('Please select a specific batch/lot to issue out!');
+
+        const minDate = document.getElementById('tx-date').min;
+        if (minDate && txDate < minDate) {
+          return alert(`Temporal Conflict: Stock Out date (${txDate}) cannot be earlier than the lot receipt date (${minDate}).`);
+        }
+      }
+
+      const payload = {
+        type: type,
+        txDate: txDate,
+        itemCode: String(select.value).trim().toUpperCase(),
+        itemName: opt.getAttribute('data-name'),
+        unit: opt.getAttribute('data-unit'),
+        lotNumber: String(lotNumber).trim().toUpperCase(),
+        expiryDate: expiryDate,
+        qty: qty,
+        note: document.getElementById('tx-note').value,
+        linkedPoId: linkedPoId,
+        linkedPoNumber: linkedPoNumber
+      };
+
+      submitBtn.disabled = true;
+      submitBtn.innerText = 'Saving to Sheet...';
+      showSyncing(true);
+
+      google.script.run
+        .withFailureHandler(err => {
+          submitBtn.disabled = false;
+          submitBtn.innerText = 'Submit Transaction';
+          showSyncing(false);
+          alert('Transaction rejected: ' + err);
+        })
+        .withSuccessHandler(res => {
+          submitBtn.disabled = false;
+          submitBtn.innerText = 'Submit Transaction';
+          showSyncing(false);
+          if (!res.success) {
+            alert('Error: ' + res.error);
+          } else {
+            closeModal('tx-modal');
+            applyAppDataFromSheet(res.appData);
+          }
+        })
+        .createTransaction(payload);
+    }
+
+    function openVoidModal(txId) {
+      document.getElementById('void-tx-id').value = txId;
+      document.getElementById('void-tx-label').innerText = txId;
+      document.getElementById('void-reason').value = '';
+      document.getElementById('void-modal').classList.remove('hidden');
+      document.getElementById('void-modal').classList.add('flex');
+    }
+
+    function handleVoidSubmit(e) {
+      e.preventDefault();
+      const submitBtn = document.getElementById('void-submit-btn');
+      const payload = {
+        txId: document.getElementById('void-tx-id').value,
+        reason: document.getElementById('void-reason').value
+      };
+
+      submitBtn.disabled = true;
+      submitBtn.innerText = 'Voiding in Sheet...';
+      showSyncing(true);
+
+      google.script.run
+        .withFailureHandler(err => {
+          submitBtn.disabled = false;
+          submitBtn.innerText = 'Confirm Void';
+          showSyncing(false);
+          alert('Network or server error: ' + err);
+        })
+        .withSuccessHandler(res => {
+          submitBtn.disabled = false;
+          submitBtn.innerText = 'Confirm Void';
+          showSyncing(false);
+          if (!res.success) {
+            alert('Void Rejected: ' + res.error);
+          } else {
+            closeModal('void-modal');
+            closeModal('lot-history-modal');
+            applyAppDataFromSheet(res.appData);
+          }
+        })
+        .voidTransaction(payload);
+    }
+
+    function openLotHistory(encodedItemCode, encodedLotNumber) {
+      const itemCode = decodeURIComponent(encodedItemCode).toUpperCase();
+      const lotNumber = decodeURIComponent(encodedLotNumber).toUpperCase();
+
+      const batch = globalBatches.find(b => 
+        String(b.ItemCode || '').trim().toUpperCase() === itemCode && 
+        String(b.LotNumber || '').trim().toUpperCase() === lotNumber
+      );
+
+      document.getElementById('lot-history-subtitle').innerText = `SKU: ${itemCode} | Name: ${batch ? batch.ItemName : ''} | Lot: ${lotNumber}`;
+      document.getElementById('hist-total-in').innerText = batch ? batch.QtyIn : '--';
+      document.getElementById('hist-total-out').innerText = batch ? batch.QtyOut : '--';
+      document.getElementById('hist-current-stock').innerText = batch ? batch.CurrentStock : '--';
+      document.getElementById('hist-expiry').innerText = (batch && batch.ExpiryDate) ? String(batch.ExpiryDate).slice(0, 10) : 'N/A';
+
+      const filteredTx = allTransactions.filter(t => 
+        String(t.ItemCode || '').trim().toUpperCase() === itemCode && 
+        String(t.LotNumber || '').trim().toUpperCase() === lotNumber
+      );
+
+      const tbody = document.getElementById('lot-history-tbody');
+      if (filteredTx.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="8" class="py-8 text-center text-slate-400">No transaction records found for this batch.</td></tr>`;
+      } else {
+        tbody.innerHTML = filteredTx.map(t => {
+          const isVoided = t.Status === 'VOIDED' || String(t.Type || '').startsWith('VOID_');
+          return `
+            <tr class="hover:bg-slate-50 ${isVoided ? 'text-slate-400 bg-slate-50' : ''}">
+              <td class="py-2.5 px-3 font-mono text-xs">${t.TxID}</td>
+              <td class="py-2.5 px-3 text-xs text-slate-500">${t.Timestamp}</td>
+              <td class="py-2.5 px-3">
+                <span class="px-2 py-0.5 rounded text-xs font-bold ${t.Type === 'IN' ? 'bg-emerald-100 text-emerald-700' : (t.Type === 'OUT' ? 'bg-rose-100 text-rose-700' : 'bg-slate-200 text-slate-600')}">${t.Type}</span>
+              </td>
+              <td class="py-2.5 px-3 text-right font-bold">${t.Qty}</td>
+              <td class="py-2.5 px-3 text-xs text-slate-500">${t.Operator}</td>
+              <td class="py-2.5 px-3 text-center">
+                <span class="px-2 py-0.5 rounded text-[10px] font-bold ${isVoided ? 'badge-voided' : 'bg-emerald-50 text-emerald-700'}">${t.Status || 'ACTIVE'}</span>
+              </td>
+              <td class="py-2.5 px-3 text-xs text-slate-500">${t.Note || '-'}</td>
+              <td class="py-2.5 px-3 text-center">
+                ${(!isVoided) ? `
+                  <button onclick="openVoidModal('${t.TxID}')" class="text-rose-600 hover:text-rose-800 text-xs font-semibold">Void</button>
+                ` : '-'}
+              </td>
+            </tr>
+          `;
+        }).join('');
+      }
+
+      document.getElementById('btn-export-batch-hist').onclick = function() {
+        exportTransactionsToExcel(filteredTx, `Batch_Log_${itemCode}_${lotNumber}`);
+      };
+
+      document.getElementById('lot-history-modal').classList.remove('hidden');
+      document.getElementById('lot-history-modal').classList.add('flex');
+    }
+
+    function openItemModal() {
+      document.getElementById('item-modal').classList.remove('hidden');
+      document.getElementById('item-modal').classList.add('flex');
+    }
+
+    function closeModal(id) {
+      document.getElementById(id).classList.add('hidden');
+      document.getElementById(id).classList.remove('flex');
+    }
+
+    function handleItemSubmit(e) {
+      e.preventDefault();
+      const submitBtn = document.getElementById('item-submit-btn');
+      const payload = {
+        ItemCode: document.getElementById('it-code').value.trim().toUpperCase(),
+        ItemName: document.getElementById('it-name').value,
+        Category: document.getElementById('it-category').value,
+        Unit: document.getElementById('it-unit').value,
+        MinStock: Number(document.getElementById('it-min').value) || 0
+      };
+
+      submitBtn.disabled = true;
+      submitBtn.innerText = 'Saving to Sheet...';
+      showSyncing(true);
+
+      google.script.run
+        .withFailureHandler(err => {
+          submitBtn.disabled = false;
+          submitBtn.innerText = 'Save SKU';
+          showSyncing(false);
+          alert('Error: ' + err);
+        })
+        .withSuccessHandler(res => {
+          submitBtn.disabled = false;
+          submitBtn.innerText = 'Save SKU';
+          showSyncing(false);
+          if (!res.success) {
+            alert('Could not save SKU: ' + res.error);
+          } else {
+            closeModal('item-modal');
+            applyAppDataFromSheet(res.appData);
+          }
+        })
+        .saveMasterItem(payload);
+    }
+
+    function renderItems(items) {
+      const tbody = document.getElementById('items-tbody');
+      if (!tbody) return;
+      tbody.innerHTML = items.map(it => `
+        <tr class="hover:bg-slate-50">
+          <td class="py-3 px-4 font-semibold text-slate-700">${it.ItemCode}</td>
+          <td class="py-3 px-4">${it.ItemName}</td>
+          <td class="py-3 px-4">${it.Category || '-'}</td>
+          <td class="py-3 px-4">${it.Unit}</td>
+          <td class="py-3 px-4 text-right font-medium">${it.MinStock} ${Number(it.MinStock) === 0 ? '<span class="text-slate-400 text-xs">(No alert)</span>' : ''}</td>
+        </tr>
+      `).join('');
+    }
+
+    function populateItemSelect(items) {
+      const select = document.getElementById('tx-item');
+      if (!select) return;
+      select.innerHTML = '<option value="">-- Choose item SKU --</option>' + items.map(it => 
+        `<option value="${it.ItemCode}" data-name="${it.ItemName}" data-unit="${it.Unit}">${it.ItemCode} - ${it.ItemName}</option>`
+      ).join('');
+    }
+
+    // =========================================================================
+    // 7. EXCEL EXPORTS
+    // =========================================================================
+    function exportTransactionsToExcel(txList, fileNamePrefix) {
+      if (!txList || txList.length === 0) return alert('No transaction data available.');
+      const exportData = txList.map(t => ({
+        'Transaction ID': t.TxID,
+        'Timestamp': t.Timestamp,
+        'Type': t.Type,
+        'Item Code': t.ItemCode,
+        'Item Description': t.ItemName,
+        'Lot Number': t.LotNumber,
+        'Expiry Date': t.ExpiryDate || 'N/A',
+        'Quantity': Number(t.Qty) || 0,
+        'UoM': t.Unit || '',
+        'Operator': t.Operator || '',
+        'Status': t.Status || 'ACTIVE',
+        'Notes': t.Note || ''
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Batch_Audit');
+      XLSX.writeFile(wb, `${fileNamePrefix}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    }
+
+    function exportAllTransactionsToExcel() {
+      const listToExport = (currentFilteredTx && currentFilteredTx.length > 0) ? currentFilteredTx : allTransactions;
+      if (!listToExport || listToExport.length === 0) return alert('No transaction data available.');
+
+      const exportData = listToExport.map(t => ({
+        'Transaction ID': t.TxID,
+        'Timestamp': t.Timestamp,
+        'Type': t.Type,
+        'Item Code': t.ItemCode,
+        'Item Description': t.ItemName,
+        'Lot Number': t.LotNumber,
+        'Expiry Date': t.ExpiryDate || 'N/A',
+        'Quantity': Number(t.Qty) || 0,
+        'UoM': t.Unit || '',
+        'Operator': t.Operator || '',
+        'Status': t.Status || 'ACTIVE',
+        'Reference ID': t.RefTxID || '',
+        'Notes': t.Note || '',
+        'Void Reason': t.VoidReason || ''
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Ledger');
+      XLSX.writeFile(wb, `Transaction_Ledger_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    }
+
+    function exportPOsToExcel() {
+      if (!allPOs || allPOs.length === 0) return alert('No PO data available to export.');
+      const exportData = allPOs.map(p => ({
+        'PO Number': p.poNumber,
+        'Item Code': p.itemCode,
+        'Item Description': p.itemName,
+        'Status': p.status,
+        'Qty Ordered': p.qtyOrdered,
+        'Qty Received': p.qtyReceived,
+        'Qty Remaining': p.remaining,
+        'ETA Date': p.eta,
+        'Vendor / Notes': p.notes,
+        'Created Date': p.createdAt,
+        'Operator': p.operator
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Purchase_Orders');
+      XLSX.writeFile(wb, `InTransit_POs_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    }
+  </script>
+</body>
+</html>
