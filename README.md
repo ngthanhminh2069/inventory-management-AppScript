@@ -5,7 +5,7 @@
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3.x-38B2AC.svg)](https://tailwindcss.com/)
 [![Release](https://img.shields.io/badge/Release-v2.0-indigo.svg)](https://github.com/ngthanhminh2069/inventory-management-AppScript)
 
-**OpenWMS v2.0** is an enterprise-grade, zero-cost warehouse, lab bench, and procurement control system running entirely on **Google Sheets** and **Google Apps Script V8**. 
+**OpenWMS v2.0** is a lightweight, zero-cost warehouse, lab bench, and procurement control system running entirely on **Google Sheets** and **Google Apps Script V8** for small teams/companies who are still working, tracking with normal excel file.
 
 Built for laboratories, biotechnology facilities, manufacturing workshops, and distribution centers, OpenWMS v2.0 delivers real-time stock control, FEFO lot picking, in-transit purchase order tracking, lab bench consumption monitoring, accounts payable (AP) invoice reconciliation, and an immutable audit trail without requiring external servers or database subscriptions.
 
